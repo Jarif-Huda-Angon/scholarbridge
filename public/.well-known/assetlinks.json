@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "com.jaarif.scholarbridge",
+        "sha256_cert_fingerprints": ["F8:F4:A0:61:3A:FD:35:DC:82:FF:02:95:28:AA:DB:74:8B:57:DC:6F:95:14:54:B4:B8:DE:9D:E9:6D:50:15:BF"]
+      }
+    }]
