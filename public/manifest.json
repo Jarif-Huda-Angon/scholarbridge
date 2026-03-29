@@ -1,0 +1,17 @@
+{
+    "name": "ScholarBridge",
+    "short_name": "ScholarBridge",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#f8fafc",
+    "theme_color": "#4f46e5",
+    "description": "AI Outreach Portal for Academic Discovery",
+    "icons": [
+        {
+            "src": "https://www.pwabuilder.com/assets/icons/icon_512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+        }
+    ]
+}
