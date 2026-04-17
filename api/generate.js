@@ -47,7 +47,7 @@ export default async function handler(req, res) {
         }
 
         // 4. Model Router (Flash for Free, Pro for Paid)
-        const modelName = tier === 'pro' ? 'gemini-2.5-pro' : 'gemini-2.0-flash';;
+        const modelName = tier === 'pro' ? 'gemini-1.5-pro' : 'gemini-1.5-flash-8b';
 
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_SECRET_KEY);
         const model = genAI.getGenerativeModel({ model: modelName });
