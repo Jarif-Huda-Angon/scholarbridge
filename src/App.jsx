@@ -1,393 +1,845 @@
 import React, { useState, useEffect } from 'react';
-import { auth, db } from './firebase';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "firebase/auth";
-import { doc, getDoc, setDoc } from "firebase/firestore";
 import {
-  LayoutDashboard, UserCircle, Search, BrainCircuit,
-  LogOut, Save, Loader2, Sparkles, Mail, CheckCircle2, Globe, Bookmark, FileText, Menu, X
+  Search, BookOpen, User, CheckCircle, AlertTriangle,
+  Copy, X, GraduationCap, BarChart3, LayoutDashboard,
+  Briefcase, Globe, FileText, Plus, Send, Calendar,
+  Building2, BrainCircuit, MessageSquare, PenTool, UploadCloud,
+  Loader2, Sparkles, Menu, UserPlus, GitBranch, Save, ChevronRight,
+  PieChart, TrendingUp, Clock, Award, Eye, EyeOff, Link as LinkIcon
 } from 'lucide-react';
 
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const [isSaving, setIsSaving] = useState(false);
-  const [isDrafting, setIsDrafting] = useState(false);
-  const [generatedEmail, setGeneratedEmail] = useState('');
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // NEW: Mobile sidebar state
-
-  // Login State
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
-
-  // Profile State
-  const [profile, setProfile] = useState({
-    fullName: '',
-    researchInterest: '',
-    fullCVText: '',
-    drafts: []
-  });
-
-  // Discovery Search State
-  const [searchQuery, setSearchQuery] = useState({ location: '', specificUni: '', topic: '', ranking: 'Top 100' });
-
-  // 1. Auth Listener
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
-      if (currentUser) {
-        const docRef = doc(db, "users", currentUser.uid);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          setProfile({ drafts: [], fullCVText: '', ...docSnap.data() });
-        }
-      }
-      setLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  const handleAuth = async (e) => {
-    e.preventDefault();
-    try {
-      if (isSignUp) await createUserWithEmailAndPassword(auth, email, password);
-      else await signInWithEmailAndPassword(auth, email, password);
-    } catch (error) { alert(error.message); }
+// --- API ENGINE ---
+const fetchFromGemini = async (prompt, systemPrompt = "You are a helpful AI.") => {
+  const apiKey = ""; // API key is injected by the execution environment
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    systemInstruction: { parts: [{ text: systemPrompt }] }
   };
 
-  // 2. Draft Email using AI Discovery Engine
-  const handleDraftEmail = async () => {
-    if (!profile.fullName || !profile.researchInterest) {
-      alert("Please save your Full Name and Research Focus in the Researcher Profile first!");
-      return;
-    }
-    if (!searchQuery.location || !searchQuery.topic) {
-      alert("Please enter a Target Location and Research Area!");
-      return;
-    }
-
-    setIsDrafting(true);
+  const delays = [1000, 2000, 4000, 8000, 16000];
+  for (let attempt = 0; attempt < 6; attempt++) {
     try {
-      const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-
-      const locationLogic = searchQuery.specificUni
-        ? `Crucially, this professor MUST be actively teaching/researching at ${searchQuery.specificUni} in ${searchQuery.location}.`
-        : `Crucially, this professor MUST be at a university in ${searchQuery.location} that is globally ranked in the ${searchQuery.ranking} tier.`;
-
-      const promptText = `Act as an expert academic placement advisor. 
-      First, identify a real, active university professor. 
-      ${locationLogic}
-      They must specialize in "${searchQuery.topic}". 
-      
-      Then, write a highly personalized, professional cold outreach email to them on behalf of ${profile.fullName}. 
-      My primary research focus is: ${profile.researchInterest}.
-      Here is my full CV data: ${profile.fullCVText || "an active interest in advancing this field."}
-      
-      The goal of the email is to inquire about PhD opportunities in their lab. Analyze my CV data and seamlessly weave 1 or 2 of my most impressive, relevant achievements into the email to prove my high competence. 
-      Start your response by boldly stating the Professor's Name and University on the first line so the user knows who was found, followed by the email body. Keep it persuasive, academic, and strictly under 250 words.`;
-
       const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts: [{ text: promptText }] }] })
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
       });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error?.message || "Unknown API Error");
-
-      setGeneratedEmail(data.candidates[0].content.parts[0].text);
-      setActiveTab('draft');
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      const result = await response.json();
+      return result.candidates?.[0]?.content?.parts?.[0]?.text || "No response generated.";
     } catch (error) {
-      alert("Raw API Error: " + error.message);
+      if (attempt === 5) {
+        console.error("Gemini API Error:", error);
+        return "Sorry, I encountered an error connecting to the AI. Please try again later.";
+      }
+      await new Promise(resolve => setTimeout(resolve, delays[attempt]));
     }
-    setIsDrafting(false);
+  }
+};
+
+// JSON Extractor Helper
+const extractJSON = (text) => {
+  try {
+    const match = text.match(/\[[\s\S]*\]/);
+    if (match) return JSON.parse(match[0]);
+
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      for (const key in parsed) {
+        if (Array.isArray(parsed[key])) return parsed[key];
+      }
+    }
+    return parsed;
+  } catch (e) {
+    return null;
+  }
+};
+
+// --- INITIAL DATABASE SCHEMA ---
+const initialProfessors = [
+  { id: 'p1', name: 'Dr. Alan Turing', university: 'MIT', department: 'CSAIL', country: 'US', researchTags: ['LLM', 'Multi-Agent'], matchScore: 95, statusPhase: 'Draft Ready', lastContactedDate: Date.now() - (2 * 24 * 60 * 60 * 1000), latestPaper: 'Scalable LLM Orchestration in Edge Environments' },
+  { id: 'p2', name: 'Dr. Kenji Fujimoto', university: 'Kyoto University', department: 'Robotics', country: 'Japan', researchTags: ['Swarm Intelligence'], matchScore: 88, statusPhase: 'Contacted', lastContactedDate: Date.now() - (9 * 24 * 60 * 60 * 1000), latestPaper: 'Decentralized Swarm Intelligence Protocols' },
+  { id: 'p3', name: 'Dr. Wei Chen', university: 'Tsinghua University', department: 'Computer Science', country: 'China', researchTags: ['HPC', 'Neural Networks'], matchScore: 92, statusPhase: 'Lead', lastContactedDate: null, latestPaper: 'Compute Efficiency in Large-Scale Neural Nets' }
+];
+
+const initialUniversities = [
+  { id: 'u1', name: 'MIT', country: 'US' },
+  { id: 'u2', name: 'Kyoto University', country: 'Japan' },
+  { id: 'u3', name: 'Tsinghua University', country: 'China' },
+  { id: 'u4', name: 'Boston University', country: 'US' }
+];
+
+const initialCountries = [
+  { id: 'c1', name: 'US' },
+  { id: 'c2', name: 'Japan' },
+  { id: 'c3', name: 'China' }
+];
+
+const initialScholarships = [
+  { id: 's1', name: 'MEXT University Recommendation', provider: 'MEXT Japan', country: 'Japan', portalUrl: 'studyinjapan.go.jp', username: 'jarif_mext', password: 'encrypted_pass_123', resultDate: '2026-08-15', amount: 'Full Tuition + Stipend', status: 'Applied' },
+  { id: 's2', name: 'Fulbright Foreign Student Program', provider: 'US Dept of State', country: 'US', portalUrl: 'fulbright.org', username: 'jarif_fb', password: 'encrypted_pass_456', resultDate: '2026-09-10', amount: 'Full Funding', status: 'Drafting' }
+];
+
+const KANBAN_COLUMNS = ['Lead', 'Draft Ready', 'Contacted', 'Follow-up 1', 'Replied', 'Accepted', 'Rejected'];
+const SCHOLARSHIP_STATUSES = ['Discovery', 'Drafting', 'Applied', 'Interview', 'Won', 'Rejected'];
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+  // Relational CRM State
+  const [professors, setProfessors] = useState(initialProfessors);
+  const [targetUniversities, setTargetUniversities] = useState(initialUniversities);
+  const [targetCountries, setTargetCountries] = useState(initialCountries);
+  const [scholarships, setScholarships] = useState(initialScholarships);
+
+  // Selection & UI State
+  const [selectedProf, setSelectedProf] = useState(null);
+  const [selectedUni, setSelectedUni] = useState(null);
+  const [selectedCountry, setSelectedCountry] = useState(null);
+  const [selectedScholarship, setSelectedScholarship] = useState(null);
+  const [draggedProfId, setDraggedProfId] = useState(null);
+  const [showPasswordMap, setShowPasswordMap] = useState({});
+
+  // CRM Filters
+  const [filterCountry, setFilterCountry] = useState('All');
+  const [filterUni, setFilterUni] = useState('');
+
+  // Modals & Forms
+  const [crmModal, setCrmModal] = useState(null);
+  const [newProfForm, setNewProfForm] = useState({ name: '', university: '', department: '', country: '', researchTags: '', latestPaper: '', statusPhase: 'Lead' });
+  const [newUniName, setNewUniName] = useState('');
+  const [newUniCountry, setNewUniCountry] = useState('');
+  const [newCountryName, setNewCountryName] = useState('');
+  const [newScholarshipForm, setNewScholarshipForm] = useState({ name: '', provider: '', country: '', amount: '', portalUrl: '', username: '', password: '', resultDate: '', status: 'Discovery' });
+
+  // AI State
+  const [aiSearchQuery, setAiSearchQuery] = useState('');
+  const [aiSearchResults, setAiSearchResults] = useState(null);
+  const [isSearchingAI, setIsSearchingAI] = useState(false);
+  const [drafts, setDrafts] = useState({});
+  const [isDraftingEmail, setIsDraftingEmail] = useState(false);
+  const [copyNotice, setCopyNotice] = useState('');
+
+  // Document Vault & Chat State
+  const [vaultData, setVaultData] = useState({ cvText: '', sopText: '', proposalText: '', ongoingResearch: 'Agentic Orchestration Layer (AOL)', googleScholar: '', github: '', customLinks: [] });
+  const [chatInput, setChatInput] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const [chatMessages, setChatMessages] = useState([{ role: 'assistant', text: "Commander, Dashboard, CRM, and Scholarship Vault are fully synced. Awaiting your command." }]);
+
+  // --- HELPERS ---
+  const isNeedsFollowUp = (prof) => {
+    if (prof.statusPhase !== 'Contacted' && prof.statusPhase !== 'Follow-up 1') return false;
+    if (!prof.lastContactedDate) return false;
+    return ((Date.now() - prof.lastContactedDate) / (1000 * 60 * 60 * 24)) > 7;
+  };
+  const togglePasswordVisibility = (id) => setShowPasswordMap(prev => ({ ...prev, [id]: !prev[id] }));
+
+  // --- DATA MODIFICATION (EDITABLE FIELDS) ---
+  const handleProfUpdate = (profId, field, value) => {
+    setProfessors(prev => prev.map(p => {
+      if (p.id === profId) {
+        const requiresDateUpdate = (field === 'statusPhase') && (value === 'Contacted' || value === 'Follow-up 1') && p.statusPhase !== value;
+        return { ...p, [field]: value, lastContactedDate: requiresDateUpdate ? Date.now() : p.lastContactedDate };
+      }
+      return p;
+    }));
+    if (selectedProf?.id === profId) setSelectedProf(prev => ({ ...prev, [field]: value }));
   };
 
-  // 3. Save Draft to Database
-  const handleSaveDraftToDB = async () => {
-    setIsSaving(true);
-    const targetName = searchQuery.specificUni ? searchQuery.specificUni : `Tier ${searchQuery.ranking}`;
-    const newDraft = {
-      targetDetails: `${searchQuery.topic} in ${searchQuery.location} (${targetName})`,
-      content: generatedEmail,
-      date: new Date().toLocaleDateString()
+  const handleScholarshipUpdate = (schId, field, value) => {
+    setScholarships(prev => prev.map(s => s.id === schId ? { ...s, [field]: value } : s));
+    if (selectedScholarship?.id === schId) setSelectedScholarship(prev => ({ ...prev, [field]: value }));
+  };
+
+  const executeAddProf = (profData) => {
+    const newProf = {
+      ...profData,
+      id: `p${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      researchTags: Array.isArray(profData.researchTags) ? profData.researchTags : (profData.researchTags || '').split(',').map(t => t.trim()),
+      matchScore: profData.matchScore || Math.floor(Math.random() * (99 - 75 + 1) + 75),
+      lastContactedDate: profData.statusPhase === 'Contacted' ? Date.now() : null
     };
+    setProfessors(prev => [...prev, newProf]);
 
-    const updatedDrafts = [newDraft, ...(profile.drafts || [])];
-    const updatedProfile = { ...profile, drafts: updatedDrafts };
-
-    try {
-      await setDoc(doc(db, "users", user.uid), updatedProfile);
-      setProfile(updatedProfile);
-      alert("Draft Saved to Database!");
-      setActiveTab('saved');
-    } catch (error) {
-      alert("Error saving draft: " + error.message);
+    if (newProf.country && !targetCountries.find(c => c.name.toLowerCase() === newProf.country.toLowerCase())) {
+      setTargetCountries(prev => [...prev, { id: `c${Date.now()}`, name: newProf.country }]);
     }
-    setIsSaving(false);
+    if (newProf.university && !targetUniversities.find(u => u.name.toLowerCase() === newProf.university.toLowerCase())) {
+      setTargetUniversities(prev => [...prev, { id: `u${Date.now()}`, name: newProf.university, country: newProf.country }]);
+    }
   };
 
-  // Navigation Helper (Closes sidebar on mobile after clicking)
-  const navTo = (tab) => {
-    setActiveTab(tab);
-    setIsSidebarOpen(false);
+  const handleManualAddProf = (e) => {
+    e.preventDefault();
+    executeAddProf(newProfForm);
+    setNewProfForm({ name: '', university: '', department: '', country: '', researchTags: '', latestPaper: '', statusPhase: 'Lead' });
+    setCrmModal(null);
   };
 
-  if (loading) return <div className="h-screen flex items-center justify-center font-bold text-indigo-600">Booting MVP...</div>;
+  const executeAddScholarship = (schData) => {
+    const newSch = {
+      ...schData,
+      id: `s${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+    };
+    setScholarships(prev => [...prev, newSch]);
+  };
 
-  if (!user) {
+  const handleManualAddScholarship = (e) => {
+    e.preventDefault();
+    executeAddScholarship(newScholarshipForm);
+    setNewScholarshipForm({ name: '', provider: '', country: '', amount: '', portalUrl: '', username: '', password: '', resultDate: '', status: 'Discovery' });
+    setCrmModal(null);
+  };
+
+  // --- AI DISCOVERY ENGINES ---
+  const runProfDiscovery = async (universityName = null) => {
+    if (!universityName && !aiSearchQuery.trim()) return;
+    setIsSearchingAI(true);
+    setAiSearchResults(null);
+
+    const systemPrompt = "You are a JSON API. Respond ONLY with a valid JSON array of objects. No markdown, no introductory text.";
+    let prompt = `I am a prospective PhD student researching ${vaultData.ongoingResearch}. Suggest 3 highly relevant professors. 
+    Format STRICTLY as a JSON array with these exact keys: "name", "university", "department", "country", "latestPaper", "matchReason", "researchTags" (this must be an array of strings). `;
+
+    if (universityName) {
+      const existingProfs = professors.filter(p => p.university.toLowerCase() === universityName.toLowerCase());
+      const excludedNames = existingProfs.map(p => p.name).join(', ');
+      prompt += `Search ONLY at ${universityName}. `;
+      if (excludedNames.length > 0) prompt += `DO NOT suggest these professors as I already have them: [${excludedNames}]. `;
+    } else {
+      prompt += `Base the search on this query: "${aiSearchQuery}". `;
+    }
+
+    const result = await fetchFromGemini(prompt, systemPrompt);
+    const parsed = extractJSON(result);
+    setAiSearchResults(parsed || result);
+    setIsSearchingAI(false);
+  };
+
+  const runScholarshipDiscovery = async () => {
+    if (!aiSearchQuery.trim()) return;
+    setIsSearchingAI(true);
+    setAiSearchResults(null);
+
+    const systemPrompt = "You are a JSON API. Respond ONLY with a valid JSON array of objects. No markdown, no introductory text.";
+    const prompt = `I am researching ${vaultData.ongoingResearch}. My query is: "${aiSearchQuery}". 
+    Suggest 3 highly relevant academic scholarships, grants, or fellowships.
+    Format STRICTLY as a JSON array with these exact keys: "name", "provider", "country", "amount", "deadline" (approximate date string), "matchReason".`;
+
+    const result = await fetchFromGemini(prompt, systemPrompt);
+    const parsed = extractJSON(result);
+    setAiSearchResults(parsed || result);
+    setIsSearchingAI(false);
+  };
+
+  const handleGenerateDraft = async (profId) => {
+    const prof = professors.find(p => p.id === profId);
+    if (!prof) return;
+    setIsDraftingEmail(true);
+    const systemPrompt = "You are an elite academic outreach AI. Keep it under 150 words. Use no brackets or placeholders. Write the final email ready to send.";
+
+    let prompt = `Write a cold email to Professor ${prof.name} at ${prof.university}. Mention their recent paper: '${prof.latestPaper}'. My core focus is: ${vaultData.ongoingResearch} & ${(prof.researchTags || []).join(', ')}. Use context from my CV if relevant: ${vaultData.cvText.substring(0, 300)}. `;
+
+    if (prof.country === 'Japan') prompt += " Mention my interest in the MEXT University Recommendation pathway.";
+    else if (prof.country === 'China') prompt += " Mention I am applying for the CSC Type B Scholarship.";
+    else if (prof.country === 'US') prompt += " Mention my interest in securing a Graduate Research Assistantship (GRA).";
+
+    prompt += " Conclude by asking for a brief 10-minute virtual chat next week. Sign off as 'Commander Jarif'.";
+
+    const draftText = await fetchFromGemini(prompt, systemPrompt);
+    setDrafts(prev => ({ ...prev, [profId]: draftText }));
+    if (prof.statusPhase === 'Lead') handleProfUpdate(profId, 'statusPhase', 'Draft Ready');
+    setIsDraftingEmail(false);
+  };
+
+  // --- DRAG & DROP KANBAN ---
+  const handleDrop = (e, targetColumn) => {
+    e.preventDefault();
+    if (draggedProfId) handleProfUpdate(draggedProfId, 'statusPhase', targetColumn);
+    setDraggedProfId(null);
+  };
+
+  const handleCopy = (text) => {
+    navigator.clipboard.writeText(text);
+    setCopyNotice('Copied!');
+    setTimeout(() => setCopyNotice(''), 2000);
+  };
+
+  // --- CHAT ---
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+    setChatMessages(prev => [...prev, { role: 'user', text: chatInput }]);
+    setChatInput('');
+    setIsTyping(true);
+    const context = chatMessages.map(m => `${m.role === 'user' ? 'Jarif' : 'AI'}: ${m.text}`).join('\n');
+    const aiResponse = await fetchFromGemini(`History:\n${context}\n\nJarif: ${chatInput}\nAI:`, "You are ScholarBridge AI CRM. Act as an academic advisor.");
+    setChatMessages(prev => [...prev, { role: 'assistant', text: aiResponse }]);
+    setIsTyping(false);
+  };
+
+  // --- VIEWS ---
+  const renderDashboard = () => {
+    const totalLeads = professors.length;
+    const contacted = professors.filter(p => ['Contacted', 'Follow-up 1', 'Replied', 'Accepted', 'Rejected'].includes(p.statusPhase)).length;
+    const replied = professors.filter(p => ['Replied', 'Accepted'].includes(p.statusPhase)).length;
+    const followUps = professors.filter(p => isNeedsFollowUp(p)).length;
+    const awaiting = contacted - replied - followUps;
+    const activeSchols = scholarships.filter(s => ['Drafting', 'Applied', 'Interview'].includes(s.status)).length;
+
+    const replyPct = contacted > 0 ? ((replied / contacted) * 100) : 0;
+    const followUpPct = contacted > 0 ? ((followUps / contacted) * 100) : 0;
+    const pieGradient = `conic-gradient(#10b981 0% ${replyPct}%, #f59e0b ${replyPct}% ${replyPct + followUpPct}%, #334155 ${replyPct + followUpPct}% 100%)`;
+
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-100 p-4 font-sans">
-        <div className="max-w-md w-full bg-white rounded-3xl shadow-xl p-6 md:p-10 border border-slate-200">
-          <div className="flex flex-col items-center mb-8">
-            <div className="p-4 bg-indigo-600 rounded-2xl text-white mb-4 shadow-lg shadow-indigo-200"><BrainCircuit size={32} /></div>
-            <h1 className="text-2xl md:text-3xl font-bold text-slate-800 tracking-tight text-center">ScholarBridge</h1>
-            <p className="text-slate-500 font-medium mt-1">AI Outreach Portal</p>
+      <div className="space-y-6 animate-in fade-in duration-500">
+        <h2 className="text-2xl font-bold text-slate-100">Command Center</h2>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg flex items-center space-x-4">
+            <div className="p-3 bg-blue-500/10 text-blue-400 rounded-lg shrink-0"><Send size={24} /></div>
+            <div><p className="text-sm text-slate-400 font-medium">Emails Sent</p><p className="text-2xl font-bold text-slate-100">{contacted}</p></div>
           </div>
-          <form onSubmit={handleAuth} className="space-y-4">
-            <input type="email" placeholder="Email Address" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 transition-all" value={email} onChange={(e) => setEmail(e.target.value)} required />
-            <input type="password" placeholder="Password" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 transition-all" value={password} onChange={(e) => setPassword(e.target.value)} required />
-            <button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-4 rounded-xl font-bold shadow-lg shadow-indigo-200 transition-all active:scale-95">{isSignUp ? 'Create Account' : 'Secure Sign In'}</button>
-          </form>
-          <button onClick={() => setIsSignUp(!isSignUp)} className="w-full mt-6 text-sm text-indigo-600 font-bold hover:underline">{isSignUp ? 'Switch to Sign In' : 'Switch to Sign Up'}</button>
+          <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg flex items-center space-x-4">
+            <div className="p-3 bg-emerald-500/10 text-emerald-400 rounded-lg shrink-0"><CheckCircle size={24} /></div>
+            <div><p className="text-sm text-slate-400 font-medium">Replies</p><p className="text-2xl font-bold text-slate-100">{replied}</p></div>
+          </div>
+          <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg flex items-center space-x-4">
+            <div className="p-3 bg-amber-500/10 text-amber-400 rounded-lg shrink-0"><Clock size={24} /></div>
+            <div><p className="text-sm text-slate-400 font-medium">Follow-ups Needed</p><p className="text-2xl font-bold text-slate-100">{followUps}</p></div>
+          </div>
+          <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg flex items-center space-x-4">
+            <div className="p-3 bg-purple-500/10 text-purple-400 rounded-lg shrink-0"><TrendingUp size={24} /></div>
+            <div><p className="text-sm text-slate-400 font-medium">Reply Rate</p><p className="text-2xl font-bold text-slate-100">{replyPct.toFixed(1)}%</p></div>
+          </div>
+          <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg flex items-center space-x-4">
+            <div className="p-3 bg-indigo-500/10 text-indigo-400 rounded-lg shrink-0"><User size={24} /></div>
+            <div><p className="text-sm text-slate-400 font-medium">Total Prof Leads</p><p className="text-2xl font-bold text-slate-100">{totalLeads}</p></div>
+          </div>
+          <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg flex items-center space-x-4">
+            <div className="p-3 bg-pink-500/10 text-pink-400 rounded-lg shrink-0"><GraduationCap size={24} /></div>
+            <div><p className="text-sm text-slate-400 font-medium">Active Scholarships</p><p className="text-2xl font-bold text-slate-100">{activeSchols}</p></div>
+          </div>
+        </div>
+
+        <div className="bg-slate-900 p-6 md:p-8 rounded-xl border border-slate-800 shadow-lg mt-8 flex flex-col md:flex-row items-center justify-between gap-8">
+          <div className="w-full md:w-1/2">
+            <h3 className="text-lg font-bold text-slate-100 flex items-center mb-2"><PieChart size={20} className="mr-2 text-indigo-400" />Outreach Pipeline</h3>
+            <p className="text-sm text-slate-400 mb-6">A visual breakdown of your sent emails and current conversion status.</p>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between"><div className="flex items-center"><div className="w-3 h-3 rounded-full bg-emerald-500 mr-2 shrink-0"></div><span className="text-sm font-medium text-slate-300">Replies Received</span></div><span className="text-sm font-bold text-slate-100">{replied}</span></div>
+              <div className="flex items-center justify-between"><div className="flex items-center"><div className="w-3 h-3 rounded-full bg-amber-500 mr-2 shrink-0"></div><span className="text-sm font-medium text-slate-300">Follow-up Needed</span></div><span className="text-sm font-bold text-slate-100">{followUps}</span></div>
+              <div className="flex items-center justify-between"><div className="flex items-center"><div className="w-3 h-3 rounded-full bg-slate-600 mr-2 shrink-0"></div><span className="text-sm font-medium text-slate-300">Awaiting Response</span></div><span className="text-sm font-bold text-slate-100">{awaiting > 0 ? awaiting : 0}</span></div>
+            </div>
+          </div>
+          <div className="w-full md:w-1/2 flex justify-center">
+            <div className="w-48 h-48 rounded-full shadow-lg transform hover:scale-105 transition-transform duration-300 relative" style={{ background: pieGradient }}>
+              <div className="w-24 h-24 bg-slate-950 rounded-full absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 shadow-inner flex items-center justify-center flex-col border border-slate-800"><span className="text-2xl font-bold text-slate-100">{contacted}</span><span className="text-[10px] uppercase font-bold text-slate-500">Sent</span></div>
+            </div>
+          </div>
         </div>
       </div>
     );
-  }
+  };
 
-  return (
-    <div className="min-h-screen bg-slate-50 flex font-sans overflow-hidden">
+  const renderKanban = () => {
+    const filteredProfessors = professors.filter(p =>
+      (filterCountry === 'All' || p.country === filterCountry) &&
+      (filterUni === '' || p.university?.toLowerCase().includes(filterUni.toLowerCase()))
+    );
 
-      {/* MOBILE OVERLAY */}
-      {isSidebarOpen && (
-        <div
-          className="fixed inset-0 bg-slate-900/60 z-40 md:hidden backdrop-blur-sm transition-opacity"
-          onClick={() => setIsSidebarOpen(false)}
-        />
-      )}
-
-      {/* SIDEBAR (Responsive) */}
-      <aside className={`w-64 bg-slate-900 text-slate-300 flex flex-col p-6 fixed h-full z-50 shadow-2xl transition-transform duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}>
-        <div className="flex items-center justify-between text-white mb-10">
-          <div className="flex items-center gap-3">
-            <BrainCircuit className="text-indigo-400" size={28} />
-            <span className="text-xl md:text-2xl font-bold tracking-tight">ScholarBridge</span>
+    return (
+      <div className="flex flex-col h-[calc(100vh-6rem)] animate-in fade-in duration-500">
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 space-y-4 lg:space-y-0">
+          <div><h2 className="text-2xl font-bold text-slate-100">Professors CRM Pipeline</h2><p className="text-sm text-slate-400">Master Kanban Board for Outreach</p></div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => { setCrmModal('addProf'); setAiSearchResults(null); }} className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white px-3 py-2 rounded-lg text-sm font-bold flex items-center transition-colors"><UserPlus size={16} className="mr-2 text-emerald-400" /> Add Prof (Manual)</button>
+            <button onClick={() => { setCrmModal('findProf'); setAiSearchResults(null); setAiSearchQuery(''); }} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-lg text-sm font-bold flex items-center transition-colors shadow-lg shadow-indigo-500/20"><Search size={16} className="mr-2" /> Find Prof (AI)</button>
           </div>
-          <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-slate-400 hover:text-white">
-            <X size={24} />
-          </button>
-        </div>
-        <nav className="flex-1 space-y-2">
-          <button onClick={() => navTo('dashboard')} className={`w-full flex items-center gap-3 p-3.5 rounded-xl font-medium transition-all ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}><LayoutDashboard size={20} /> Dashboard</button>
-          <button onClick={() => navTo('profile')} className={`w-full flex items-center gap-3 p-3.5 rounded-xl font-medium transition-all ${activeTab === 'profile' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}><UserCircle size={20} /> Researcher Profile</button>
-          <button onClick={() => navTo('match')} className={`w-full flex items-center gap-3 p-3.5 rounded-xl font-medium transition-all ${activeTab === 'match' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}><Search size={20} /> Discovery Hub</button>
-          <button onClick={() => navTo('saved')} className={`w-full flex items-center gap-3 p-3.5 rounded-xl font-medium transition-all ${activeTab === 'saved' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}><Bookmark size={20} /> Saved Drafts</button>
-        </nav>
-        <button onClick={() => signOut(auth)} className="flex items-center gap-3 p-3.5 text-slate-500 hover:text-red-400 mt-auto border-t border-slate-800 pt-6 font-medium transition-colors"><LogOut size={20} /> Log Out</button>
-      </aside>
-
-      {/* MAIN CONTENT AREA */}
-      <main className="flex-1 md:ml-64 w-full h-screen overflow-y-auto p-4 md:p-10 transition-all">
-
-        {/* MOBILE HEADER */}
-        <div className="md:hidden flex items-center justify-between bg-white p-4 rounded-2xl shadow-sm border border-slate-200 mb-6">
-          <div className="flex items-center gap-2 text-indigo-600 font-bold">
-            <BrainCircuit size={24} /> <span className="text-lg text-slate-800">ScholarBridge</span>
-          </div>
-          <button onClick={() => setIsSidebarOpen(true)} className="p-2 bg-slate-100 rounded-lg text-slate-600 hover:bg-slate-200 transition-colors">
-            <Menu size={24} />
-          </button>
         </div>
 
-        <div className="max-w-7xl mx-auto pb-10">
+        <div className="flex space-x-3 mb-6 w-full sm:w-auto">
+          <select value={filterCountry || ''} onChange={(e) => setFilterCountry(e.target.value)} className="bg-slate-900 border border-slate-700 text-slate-200 text-sm rounded-lg p-2.5 outline-none focus:border-indigo-500 cursor-pointer">
+            {['All', ...new Set(professors.map(p => p.country).filter(Boolean))].map(c => <option key={c} value={c}>{c === 'All' ? 'All Countries' : c}</option>)}
+          </select>
+          <div className="relative flex-1 sm:w-64">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-500" size={16} />
+            <input type="text" placeholder="Filter by University..." value={filterUni || ''} onChange={(e) => setFilterUni(e.target.value)} className="bg-slate-900 border border-slate-700 text-slate-200 text-sm rounded-lg block w-full pl-9 p-2.5 outline-none focus:border-indigo-500" />
+          </div>
+        </div>
 
-          {/* DASHBOARD */}
-          {activeTab === 'dashboard' && (
-            <div className="space-y-6 md:space-y-8 animate-in fade-in duration-500">
-              <h2 className="text-3xl md:text-4xl font-bold text-slate-800 tracking-tight">Welcome, {profile.fullName || "Commander"}!</h2>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 md:gap-6">
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
-                  <p className="text-slate-500 text-xs md:text-sm font-bold uppercase tracking-wider mb-1">Saved Drafts</p>
-                  <p className="text-3xl md:text-4xl font-black text-slate-800">{profile.drafts?.length || 0}</p>
-                </div>
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
-                  <p className="text-slate-500 text-xs md:text-sm font-bold uppercase tracking-wider mb-1">Targeted Universities</p>
-                  <p className="text-3xl md:text-4xl font-black text-indigo-600">Global</p>
-                </div>
-                <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow sm:col-span-2 md:col-span-1">
-                  <p className="text-slate-500 text-xs md:text-sm font-bold uppercase tracking-wider mb-1">Profile Strength</p>
-                  <div className="flex items-center gap-2">
-                    <p className="text-3xl md:text-4xl font-black text-green-500">{profile.fullCVText ? '100%' : '50%'}</p>
-                    {profile.fullCVText && <CheckCircle2 className="text-green-500" size={24} />}
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-indigo-600 rounded-3xl p-6 md:p-10 text-white shadow-xl shadow-indigo-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border border-indigo-500">
-                <div>
-                  <h3 className="text-xl md:text-2xl font-bold mb-2">Ready to discover advisors?</h3>
-                  <p className="text-indigo-100 text-sm md:text-lg flex flex-wrap gap-2 items-center">Your AI is tuned for: <span className="font-bold text-white bg-indigo-500 px-3 py-1 rounded-lg">{profile.researchInterest || "General Research"}</span></p>
-                </div>
-                <button onClick={() => navTo('match')} className="w-full md:w-auto bg-white text-indigo-600 px-8 py-4 rounded-xl font-bold shadow-lg hover:scale-105 transition-transform active:scale-95 text-base md:text-lg">Open Discovery Hub</button>
-              </div>
-            </div>
-          )}
-
-          {/* RESEARCHER PROFILE */}
-          {activeTab === 'profile' && (
-            <div className="bg-white p-6 md:p-10 rounded-3xl shadow-sm border border-slate-200 space-y-6 md:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-100 pb-6">
-                <div>
-                  <h2 className="text-2xl md:text-3xl font-bold text-slate-800">Researcher Profile</h2>
-                  <p className="text-slate-500 mt-1 text-sm md:text-base">Provide your background context so Gemini can personalize emails.</p>
-                </div>
-                <button onClick={async () => { setIsSaving(true); await setDoc(doc(db, "users", user.uid), profile); setIsSaving(false); alert("Profile Synced to Cloud!"); }} className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white px-6 md:px-8 py-3 rounded-xl font-bold flex justify-center items-center gap-2 shadow-lg shadow-indigo-100 transition-all active:scale-95">
-                  {isSaving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />} Save Profile
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8">
-                <div className="space-y-2">
-                  <label className="text-xs md:text-sm font-bold text-slate-700 ml-1 block uppercase tracking-wide">Full Legal Name</label>
-                  <input type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 transition-all text-base md:text-lg" placeholder="e.g., Jarif Angon" value={profile.fullName} onChange={(e) => setProfile({ ...profile, fullName: e.target.value })} />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs md:text-sm font-bold text-slate-700 ml-1 block uppercase tracking-wide">Primary Research Interest</label>
-                  <input type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 transition-all text-base md:text-lg" placeholder="e.g., AI Agents & Decentralization" value={profile.researchInterest} onChange={(e) => setProfile({ ...profile, researchInterest: e.target.value })} />
-                </div>
-
-                <div className="space-y-2 md:col-span-2">
-                  <label className="text-xs md:text-sm font-bold text-slate-700 ml-1 uppercase tracking-wide flex items-center gap-2"><FileText size={16} /> Raw CV Text Dump (For Deep Personalization)</label>
-                  <p className="text-slate-500 text-xs md:text-sm mb-2 ml-1">Open your actual CV document, copy everything, and paste it all right here. The AI will read the whole thing instantly.</p>
-                  <textarea
-                    className="w-full h-48 md:h-64 p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 transition-all text-sm resize-none"
-                    placeholder="Paste your entire CV text here..."
-                    value={profile.fullCVText || ''}
-                    onChange={(e) => setProfile({ ...profile, fullCVText: e.target.value })}
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* AI DISCOVERY HUB */}
-          {activeTab === 'match' && (
-            <div className="space-y-6 md:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-3xl mx-auto">
-              <div className="text-center px-4">
-                <div className="inline-flex p-3 md:p-4 bg-indigo-100 text-indigo-600 rounded-full mb-3 md:mb-4"><Globe size={28} className="md:w-8 md:h-8" /></div>
-                <h2 className="text-2xl md:text-3xl font-bold text-slate-800">AI Discovery Hub</h2>
-                <p className="text-slate-500 mt-2 text-sm md:text-lg">Tell Gemini where you want to go and what you want to study. It will find a top-tier professor and draft an email.</p>
-              </div>
-
-              <div className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-xl">
-                <div className="space-y-5 md:space-y-6">
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 md:gap-6">
-                    <div className="space-y-2">
-                      <label className="text-xs md:text-sm font-bold text-slate-700 ml-1 block uppercase tracking-wide">Target Location</label>
-                      <input type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 transition-all text-base md:text-lg" placeholder="e.g., Canada or USA" value={searchQuery.location} onChange={(e) => setSearchQuery({ ...searchQuery, location: e.target.value })} />
+        <div className="flex-1 flex overflow-x-auto space-x-4 pb-4 snap-x">
+          {KANBAN_COLUMNS.map(column => (
+            <div key={column} className="flex-shrink-0 w-80 bg-slate-900/50 rounded-xl border border-slate-800 flex flex-col snap-start" onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }} onDrop={(e) => handleDrop(e, column)}>
+              <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900 rounded-t-xl"><h3 className="font-bold text-sm text-slate-300 uppercase">{column}</h3><span className="bg-slate-800 text-slate-400 text-xs font-bold px-2 py-1 rounded-full">{filteredProfessors.filter(p => p.statusPhase === column).length}</span></div>
+              <div className="flex-1 overflow-y-auto p-3 space-y-3 min-h-[150px]">
+                {filteredProfessors.filter(p => p.statusPhase === column).map(prof => {
+                  const needsFollowUp = isNeedsFollowUp(prof);
+                  return (
+                    <div key={prof.id} draggable onDragStart={(e) => { setDraggedProfId(prof.id); e.dataTransfer.effectAllowed = 'move'; }} onClick={() => setSelectedProf(prof)} className="bg-slate-800 p-4 rounded-lg border border-slate-700 cursor-pointer hover:border-indigo-500 hover:shadow-lg hover:shadow-indigo-500/10 transition-all">
+                      <div className="flex justify-between items-start mb-2"><h4 className="font-bold text-slate-200 text-sm">{prof.name}</h4><span className="text-xs font-bold bg-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded">{prof.matchScore}%</span></div>
+                      <div className="space-y-1 mb-3"><p className="text-xs text-slate-400 flex items-center"><Building2 size={12} className="mr-1" /> {prof.university}</p><p className="text-xs text-slate-400 flex items-center"><Globe size={12} className="mr-1" /> {prof.country}</p></div>
+                      {needsFollowUp && <div className="mt-2 pt-2 border-t border-slate-700 flex items-center text-xs font-bold text-rose-400"><AlertTriangle size={12} className="mr-1" /> Needs Follow-up</div>}
                     </div>
-                    <div className="space-y-2">
-                      <label className="text-xs md:text-sm font-bold text-slate-700 ml-1 block uppercase tracking-wide">University Ranking</label>
-                      <select
-                        className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 transition-all text-base md:text-lg cursor-pointer text-slate-700 font-medium"
-                        value={searchQuery.ranking}
-                        onChange={(e) => setSearchQuery({ ...searchQuery, ranking: e.target.value })}
-                      >
-                        <option value="Top 100">Top 100 Globally</option>
-                        <option value="Top 400">Top 400 Globally</option>
-                        <option value="Top 800">Top 800 Globally</option>
-                        <option value="Top 1200">Top 1200 Globally</option>
-                        <option value="1200+">1200+ Globally</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-xs md:text-sm font-bold text-slate-700 ml-1 block uppercase tracking-wide">Specific University (Optional)</label>
-                    <input type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 transition-all text-base md:text-lg" placeholder="e.g., Stanford (Leave blank if open)" value={searchQuery.specificUni} onChange={(e) => setSearchQuery({ ...searchQuery, specificUni: e.target.value })} />
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="text-xs md:text-sm font-bold text-slate-700 ml-1 block uppercase tracking-wide">Specific Research Area</label>
-                    <input type="text" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 transition-all text-base md:text-lg" placeholder="e.g., LLMs & Robotics" value={searchQuery.topic} onChange={(e) => setSearchQuery({ ...searchQuery, topic: e.target.value })} />
-                  </div>
-
-                  <button
-                    onClick={handleDraftEmail}
-                    disabled={isDrafting}
-                    className="w-full bg-slate-900 text-white py-4 md:py-5 rounded-xl font-bold flex justify-center items-center gap-3 hover:bg-indigo-600 transition-colors disabled:opacity-50 shadow-lg mt-6 md:mt-8 text-base md:text-lg"
-                  >
-                    {isDrafting ? <Loader2 size={20} className="animate-spin md:w-6 md:h-6" /> : <Sparkles size={20} className="md:w-6 md:h-6" />}
-                    {isDrafting ? 'Gemini is searching...' : 'Discover & Draft Email'}
-                  </button>
-                </div>
+                  )
+                })}
               </div>
             </div>
-          )}
+          ))}
+        </div>
+      </div>
+    );
+  };
 
-          {/* AI GENERATED EMAIL VIEWER */}
-          {activeTab === 'draft' && (
-            <div className="bg-white p-6 md:p-10 rounded-3xl border border-slate-200 shadow-xl animate-in slide-in-from-right-8 duration-500 max-w-4xl mx-auto">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 md:mb-8 border-b border-slate-100 pb-6 gap-4">
-                <div className="flex items-center gap-3 md:gap-4 text-indigo-600">
-                  <div className="bg-indigo-100 p-2 md:p-3 rounded-xl"><Mail size={24} className="md:w-7 md:h-7" /></div>
-                  <div>
-                    <h2 className="text-2xl md:text-3xl font-bold text-slate-800">AI Discovery Match</h2>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2 md:gap-3 w-full sm:w-auto">
-                  <button onClick={() => navigator.clipboard.writeText(generatedEmail)} className="flex-1 sm:flex-none bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 md:px-6 py-2 md:py-3 rounded-lg font-bold transition-colors text-sm md:text-base">Copy</button>
-                  <button onClick={handleSaveDraftToDB} disabled={isSaving} className="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-4 md:px-6 py-2 md:py-3 rounded-lg font-bold transition-colors flex items-center justify-center gap-2 text-sm md:text-base">
-                    {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} Save Draft
-                  </button>
-                </div>
+  const renderScholarships = () => (
+    <div className="space-y-6 animate-in fade-in duration-500 max-w-6xl pb-12">
+      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 space-y-4 lg:space-y-0">
+        <div><h2 className="text-2xl font-bold text-slate-100">Scholarship Vault</h2><p className="text-sm text-slate-400">Track grants, credentials, and portals.</p></div>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => { setCrmModal('addScholarship'); setAiSearchResults(null); }} className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white px-3 py-2 rounded-lg text-sm font-bold flex items-center transition-colors"><Plus size={16} className="mr-2 text-emerald-400" /> Add Scholarship (Manual)</button>
+          <button onClick={() => { setCrmModal('findScholarship'); setAiSearchResults(null); setAiSearchQuery(''); }} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-lg text-sm font-bold flex items-center transition-colors shadow-lg shadow-indigo-500/20"><Search size={16} className="mr-2" /> Find Scholarship (AI)</button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {scholarships.map(s => (
+          <div key={s.id} onClick={() => setSelectedScholarship(s)} className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg flex flex-col cursor-pointer hover:border-indigo-500 transition-all">
+            <div className="p-5 border-b border-slate-800 flex justify-between items-start bg-slate-900/50">
+              <div>
+                <h3 className="font-bold text-lg text-slate-100 mb-1">{s.name}</h3>
+                <p className="text-sm text-slate-400">{s.provider}</p>
+                <span className="inline-flex items-center text-xs font-medium bg-slate-800 text-slate-300 px-2 py-1 rounded mt-3"><Globe size={12} className="mr-1" /> {s.country}</span>
               </div>
-              <textarea readOnly className="w-full h-72 md:h-[400px] p-4 md:p-8 bg-slate-50 border border-slate-200 rounded-2xl outline-none text-slate-700 text-base md:text-lg leading-relaxed resize-none focus:ring-2 focus:ring-indigo-500 transition-all" value={generatedEmail} />
-              <button onClick={() => navTo('match')} className="mt-6 md:mt-8 text-slate-500 hover:text-slate-800 font-bold flex items-center gap-2 transition-colors text-sm md:text-base">← Start New Search</button>
+              <div className="text-right">
+                <span className={`text-xs font-bold px-2 py-1 rounded-full ${s.status === 'Won' ? 'bg-emerald-500/20 text-emerald-400' : s.status === 'Rejected' ? 'bg-rose-500/20 text-rose-400' : 'bg-indigo-500/20 text-indigo-400'}`}>{s.status}</span>
+                <p className="text-sm font-bold text-slate-300 flex items-center mt-3 justify-end"><Calendar size={14} className="mr-1" /> {s.resultDate || 'TBD'}</p>
+              </div>
             </div>
-          )}
+            <div className="p-5 bg-slate-950 flex-1 flex justify-between items-center">
+              <div><p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Amount</p><p className="text-sm text-emerald-400 font-bold">{s.amount || 'Variable'}</p></div>
+              <div className="text-indigo-400 text-xs font-bold flex items-center">Edit / View Credentials <ChevronRight size={14} className="ml-1" /></div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 
-          {/* SAVED DRAFTS VIEWER */}
-          {activeTab === 'saved' && (
-            <div className="space-y-6 md:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="px-2">
-                <h2 className="text-2xl md:text-3xl font-bold text-slate-800">Saved Drafts</h2>
-                <p className="text-slate-500 mt-1 text-sm md:text-lg">Your repository of discovered professors and outreach emails.</p>
+  const renderTargetUniversities = () => (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="flex justify-between items-center mb-6"><div><h2 className="text-2xl font-bold text-slate-100">Target Universities</h2><p className="text-sm text-slate-400">Drill down into specific institutions.</p></div></div>
+
+      {!selectedUni ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="bg-slate-900 border border-slate-800 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center space-y-4 hover:border-indigo-500 transition-colors">
+            <div className="w-12 h-12 bg-slate-800 rounded-full flex items-center justify-center text-indigo-400"><Building2 size={24} /></div>
+            <h3 className="font-bold text-slate-200">Track New University</h3>
+            <input type="text" placeholder="e.g. Stanford" value={newUniName || ''} onChange={(e) => setNewUniName(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-200 focus:border-indigo-500 outline-none text-center" />
+            <input type="text" placeholder="Country (e.g. US)" value={newUniCountry || ''} onChange={(e) => setNewUniCountry(e.target.value)} list="existing-countries" className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-200 focus:border-indigo-500 outline-none text-center" />
+            <datalist id="existing-countries">{targetCountries.map(c => <option key={c.id} value={c.name} />)}</datalist>
+            <button onClick={() => { if (newUniName && newUniCountry) { setTargetUniversities([...targetUniversities, { id: `u${Date.now()}`, name: newUniName, country: newUniCountry }]); if (!targetCountries.find(c => c.name.toLowerCase() === newUniCountry.toLowerCase())) setTargetCountries([...targetCountries, { id: `c${Date.now()}`, name: newUniCountry }]); setNewUniName(''); setNewUniCountry(''); } }} className="bg-indigo-600 text-white w-full py-2 rounded-lg font-bold text-sm hover:bg-indigo-500">Add to Tracking</button>
+          </div>
+          {targetUniversities.map(uni => {
+            const profsAtUni = professors.filter(p => p.university === uni.name);
+            return (
+              <div key={uni.id} onClick={() => { setSelectedUni(uni); setAiSearchResults(null); }} className="bg-slate-900 border border-slate-800 rounded-xl p-6 hover:shadow-lg hover:border-indigo-500 cursor-pointer transition-all flex flex-col">
+                <div className="flex justify-between items-start mb-4"><div className="p-3 bg-emerald-500/10 text-emerald-400 rounded-lg"><Building2 size={24} /></div><span className="bg-slate-800 text-slate-300 text-xs px-2 py-1 rounded font-bold">{uni.country}</span></div>
+                <h3 className="text-xl font-bold text-slate-100 mb-2">{uni.name}</h3><p className="text-sm text-slate-400 flex-1">{profsAtUni.length} Professors Tracked</p>
+                <div className="mt-4 flex items-center text-indigo-400 text-sm font-bold">Open Hub <ChevronRight size={16} className="ml-1" /></div>
               </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 animate-in slide-in-from-right">
+          <button onClick={() => setSelectedUni(null)} className="text-slate-400 hover:text-white mb-6 flex items-center text-sm font-bold"><ChevronRight size={16} className="mr-1 rotate-180" /> Back to Universities</button>
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
+            <div><h2 className="text-3xl font-bold text-slate-100 flex items-center"><Building2 className="mr-3 text-emerald-400" /> {selectedUni.name}</h2><p className="text-slate-400 mt-2 flex items-center"><Globe size={14} className="mr-2" /> Located in {selectedUni.country}</p></div>
+            <button onClick={() => runProfDiscovery(selectedUni.name)} disabled={isSearchingAI} className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-lg flex items-center font-bold text-sm shadow-lg disabled:opacity-50 transition-colors">
+              {isSearchingAI ? <Loader2 size={16} className="mr-2 animate-spin" /> : <Sparkles size={16} className="mr-2" />} Find New Leads via AI
+            </button>
+          </div>
 
-              {(!profile.drafts || profile.drafts.length === 0) ? (
-                <div className="bg-white p-8 md:p-12 rounded-3xl border border-slate-200 text-center">
-                  <Bookmark size={40} className="mx-auto text-slate-300 mb-4 md:w-12 md:h-12" />
-                  <h3 className="text-lg md:text-xl font-bold text-slate-700">No saved drafts yet</h3>
-                  <p className="text-slate-500 mt-2 text-sm md:text-base">Generate and save an email in the Discovery Hub to see it here.</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 gap-4 md:gap-6">
-                  {profile.drafts.map((draft, i) => (
-                    <div key={i} className="bg-white p-6 md:p-8 rounded-3xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
-                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
-                        <div>
-                          <h4 className="font-bold text-lg md:text-xl text-slate-800 uppercase">{draft.targetDetails}</h4>
-                        </div>
-                        <span className="text-xs md:text-sm font-bold text-slate-400 bg-slate-100 px-3 py-1 rounded-lg self-start sm:self-auto">{draft.date}</span>
-                      </div>
-                      <div className="bg-slate-50 p-4 md:p-6 rounded-2xl border border-slate-100 mt-2 md:mt-4">
-                        <p className="text-slate-700 whitespace-pre-wrap text-sm md:text-base">{draft.content}</p>
-                      </div>
-                      <button onClick={() => navigator.clipboard.writeText(draft.content)} className="mt-4 text-indigo-600 font-bold hover:text-indigo-800 transition-colors text-sm md:text-base">Copy to Clipboard</button>
+          {/* Render AI Structured Results */}
+          {aiSearchResults && (
+            <div className="bg-slate-950 border border-indigo-500/30 p-5 rounded-lg mb-8">
+              <h3 className="text-indigo-400 font-bold mb-4 flex items-center"><BrainCircuit size={18} className="mr-2" /> AI Lead Generation (Duplicates Excluded)</h3>
+              {Array.isArray(aiSearchResults) ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {aiSearchResults.map((res, i) => (
+                    <div key={i} className="bg-slate-900 border border-slate-800 p-4 rounded-lg flex flex-col">
+                      <h4 className="font-bold text-slate-200">{res.name}</h4>
+                      <p className="text-xs text-slate-400 mb-2">{res.department}</p>
+                      <p className="text-xs text-slate-300 italic mb-4 leading-relaxed">"{res.matchReason}"</p>
+                      <button onClick={() => { executeAddProf({ ...res, statusPhase: 'Lead' }); setAiSearchResults(prev => Array.isArray(prev) ? prev.filter((_, idx) => idx !== i) : prev); }} className="mt-auto w-full text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded transition-colors flex items-center justify-center">
+                        <Plus size={14} className="mr-1" /> Quick Add to CRM
+                      </button>
                     </div>
                   ))}
+                </div>
+              ) : (
+                <div className="text-slate-300 text-sm whitespace-pre-wrap font-mono">
+                  {typeof aiSearchResults === 'object' ? JSON.stringify(aiSearchResults, null, 2) : String(aiSearchResults)}
                 </div>
               )}
             </div>
           )}
 
+          <h3 className="text-lg font-bold text-slate-200 mb-4 border-b border-slate-800 pb-2">Currently Tracking at {selectedUni.name}</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {professors.filter(p => p.university === selectedUni.name).map(prof => (
+              <div key={prof.id} className="bg-slate-950 border border-slate-800 p-4 rounded-lg flex flex-col">
+                <h4 className="font-bold text-slate-200">{prof.name}</h4><p className="text-xs text-slate-400 mb-3">{prof.department}</p>
+                <div className="mt-auto flex justify-between items-center"><span className={`text-[10px] font-bold px-2 py-1 rounded-full bg-slate-800 text-slate-300`}>{prof.statusPhase}</span><button onClick={() => { setSelectedProf(prof); setActiveTab('outreach') }} className="text-indigo-400 hover:text-indigo-300 text-xs font-bold">Open CRM</button></div>
+              </div>
+            ))}
+            {professors.filter(p => p.university === selectedUni.name).length === 0 && <p className="text-slate-500 text-sm col-span-full">No professors tracked here yet.</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderTargetCountries = () => (
+    <div className="space-y-6 animate-in fade-in duration-500">
+      <div className="flex justify-between items-center mb-6"><div><h2 className="text-2xl font-bold text-slate-100">Target Countries</h2><p className="text-sm text-slate-400">Macro-level regional pipeline tracking.</p></div></div>
+
+      {!selectedCountry ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="bg-slate-900 border border-slate-800 border-dashed rounded-xl p-6 flex flex-col items-center justify-center text-center space-y-4 hover:border-indigo-500 transition-colors">
+            <Globe size={24} className="text-purple-400" /><h3 className="font-bold text-slate-200">Track New Region</h3>
+            <input type="text" placeholder="e.g. Germany" value={newCountryName || ''} onChange={(e) => setNewCountryName(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-200 focus:border-indigo-500 outline-none text-center" />
+            <button onClick={() => { if (newCountryName) { setTargetCountries([...targetCountries, { id: `c${Date.now()}`, name: newCountryName }]); setNewCountryName(''); } }} className="bg-indigo-600 text-white w-full py-2 rounded-lg font-bold text-sm hover:bg-indigo-500">Track Country</button>
+          </div>
+
+          {targetCountries.map(country => {
+            const unisInCountry = targetUniversities.filter(u => u.country === country.name);
+            const profsInCountry = professors.filter(p => p.country === country.name);
+            return (
+              <div key={country.id} onClick={() => setSelectedCountry(country)} className="bg-slate-900 border border-slate-800 rounded-xl p-6 hover:shadow-lg hover:border-indigo-500 cursor-pointer flex flex-col">
+                <Globe size={32} className="text-purple-400 mb-4" /><h3 className="text-xl font-bold text-slate-100 mb-2">{country.name}</h3>
+                <p className="text-xs text-slate-400"><strong className="text-slate-300">{unisInCountry.length}</strong> Universities</p>
+                <p className="text-xs text-slate-400"><strong className="text-slate-300">{profsInCountry.length}</strong> Professors</p>
+                <div className="mt-4 flex items-center text-indigo-400 text-sm font-bold mt-auto">View Region <ChevronRight size={16} className="ml-1" /></div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 animate-in slide-in-from-right">
+          <button onClick={() => setSelectedCountry(null)} className="text-slate-400 hover:text-white mb-6 flex items-center text-sm font-bold"><ChevronRight size={16} className="mr-1 rotate-180" /> Back to Regions</button>
+          <h2 className="text-3xl font-bold text-slate-100 mb-6 flex items-center"><Globe className="mr-3 text-purple-400" /> {selectedCountry.name} Hub</h2>
+
+          <h3 className="text-lg font-bold text-slate-200 mb-4 border-b border-slate-800 pb-2 flex items-center"><Building2 size={18} className="mr-2" /> Tracked Universities</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            {targetUniversities.filter(u => u.country === selectedCountry.name).map(uni => (
+              <div key={uni.id} onClick={() => { setActiveTab('universities'); setSelectedUni(uni) }} className="bg-slate-950 border border-slate-800 p-4 rounded-lg cursor-pointer hover:border-indigo-500 flex justify-between items-center">
+                <span className="font-bold text-sm text-slate-200">{uni.name}</span> <ChevronRight size={14} className="text-slate-500" />
+              </div>
+            ))}
+            {targetUniversities.filter(u => u.country === selectedCountry.name).length === 0 && <p className="text-slate-500 text-sm col-span-2">No universities tracked here yet.</p>}
+          </div>
+
+          <h3 className="text-lg font-bold text-slate-200 mb-4 border-b border-slate-800 pb-2 flex items-center"><User size={18} className="mr-2" /> Overall Outreach Pipeline</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {professors.filter(p => p.country === selectedCountry.name).map(prof => (
+              <div key={prof.id} className="bg-slate-950 border border-slate-800 p-4 rounded-lg">
+                <h4 className="font-bold text-slate-200 text-sm">{prof.name}</h4><p className="text-xs text-slate-400">{prof.university}</p>
+                <div className="mt-2 flex justify-between items-center"><span className="text-[10px] font-bold px-2 py-1 rounded bg-slate-800 text-slate-300">{prof.statusPhase}</span><button onClick={() => { setSelectedProf(prof); setActiveTab('outreach') }} className="text-indigo-400 hover:text-indigo-300 text-[10px] font-bold uppercase">Open CRM</button></div>
+              </div>
+            ))}
+            {professors.filter(p => p.country === selectedCountry.name).length === 0 && <p className="text-slate-500 text-sm col-span-full">No professors tracked in this region.</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderVault = () => (
+    <div className="space-y-6 animate-in fade-in duration-500 max-w-5xl pb-12">
+      <div className="flex flex-col md:flex-row justify-between md:items-end gap-4 mb-6">
+        <div><h2 className="text-2xl font-bold text-slate-100">Document Vault</h2><p className="text-slate-400 mt-1">Provide your context. Gemini uses this secure vault to deeply personalize drafts.</p></div>
+        <button className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2.5 rounded-lg text-sm font-bold shadow-lg transition-all flex items-center"><Save size={18} className="mr-2" /> Save Local Vault</button>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-6">
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl shadow-lg">
+            <h3 className="font-bold text-slate-200 mb-4 flex items-center"><FileText size={18} className="mr-2 text-indigo-400" /> Raw CV Text Dump</h3>
+            <textarea value={vaultData.cvText || ''} onChange={(e) => handleVaultChange('cvText', e.target.value)} placeholder="Paste your entire CV text here. The AI will parse it instantly..." className="w-full h-40 bg-slate-950 border border-slate-800 rounded-lg p-4 text-sm text-slate-300 focus:outline-none focus:border-indigo-500 resize-none font-mono" />
+          </div>
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl shadow-lg">
+            <h3 className="font-bold text-slate-200 mb-4 flex items-center"><PenTool size={18} className="mr-2 text-indigo-400" /> Statement of Purpose (SOP)</h3>
+            <textarea value={vaultData.sopText || ''} onChange={(e) => handleVaultChange('sopText', e.target.value)} placeholder="Paste your SOP draft here..." className="w-full h-32 bg-slate-950 border border-slate-800 rounded-lg p-4 text-sm text-slate-300 focus:outline-none focus:border-indigo-500 resize-none font-mono" />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl shadow-lg"><h3 className="font-bold text-slate-200 mb-4 text-sm flex items-center"><BrainCircuit size={16} className="mr-2 text-indigo-400" /> Research Proposal</h3><textarea value={vaultData.proposalText || ''} onChange={(e) => handleVaultChange('proposalText', e.target.value)} placeholder="Core thesis abstract..." className="w-full h-24 bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm text-slate-300 focus:outline-none focus:border-indigo-500 resize-none font-mono" /></div>
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl shadow-lg"><h3 className="font-bold text-slate-200 mb-4 text-sm flex items-center"><UploadCloud size={16} className="mr-2 text-indigo-400" /> Ongoing Research</h3><textarea value={vaultData.ongoingResearch || ''} onChange={(e) => handleVaultChange('ongoingResearch', e.target.value)} placeholder="e.g. Agentic Orchestration Layer (AOL)..." className="w-full h-24 bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm text-slate-300 focus:outline-none focus:border-indigo-500 resize-none font-mono" /></div>
+          </div>
+        </div>
+        <div className="space-y-6">
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl shadow-lg">
+            <h3 className="font-bold text-slate-200 mb-4 flex items-center"><Globe size={18} className="mr-2 text-indigo-400" /> Academic Links</h3>
+            <div className="space-y-4">
+              <div><label className="text-xs font-bold text-slate-500 mb-1 flex items-center"><GraduationCap size={14} className="mr-1" /> Google Scholar</label><input type="text" value={vaultData.googleScholar || ''} onChange={(e) => handleVaultChange('googleScholar', e.target.value)} placeholder="https://scholar.google.com/..." className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" /></div>
+              <div><label className="text-xs font-bold text-slate-500 mb-1 flex items-center"><GitBranch size={14} className="mr-1" /> GitHub Profile</label><input type="text" value={vaultData.github || ''} onChange={(e) => handleVaultChange('github', e.target.value)} placeholder="https://github.com/..." className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500" /></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-200 font-sans flex flex-col md:flex-row overflow-hidden">
+
+      {/* Mobile Header */}
+      <div className="md:hidden h-16 bg-slate-950 border-b border-slate-800 flex items-center justify-between px-4 fixed top-0 w-full z-40">
+        <div className="flex items-center space-x-2"><BrainCircuit className="text-indigo-500" size={24} /><span className="text-lg font-bold text-white">ScholarBridge</span></div>
+        <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="text-slate-400">{isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}</button>
+      </div>
+
+      {/* Sidebar */}
+      <aside className={`w-64 bg-slate-900 border-r border-slate-800 flex flex-col fixed h-full z-40 top-0 left-0 transform transition-transform duration-300 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:z-10`}>
+        <div className="p-6 hidden md:flex items-center space-x-3"><div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center"><GraduationCap className="text-white" size={24} /></div><span className="text-xl font-bold text-white">ScholarBridge</span></div>
+        <div className="flex-1 overflow-y-auto px-4 mt-8 md:mt-4 space-y-1">
+          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 px-2">Command Center</p>
+          <button onClick={() => { setActiveTab('dashboard'); setIsMobileMenuOpen(false); }} className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-colors ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-800'}`}><LayoutDashboard size={18} /><span className="font-medium text-sm">Dashboard</span></button>
+
+          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mt-6 mb-2 px-2">Pipeline Architecture</p>
+          <button onClick={() => { setActiveTab('countries'); setSelectedCountry(null); setIsMobileMenuOpen(false); }} className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-colors ${activeTab === 'countries' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-800'}`}><Globe size={18} /><span className="font-medium text-sm">Target Countries</span></button>
+          <button onClick={() => { setActiveTab('universities'); setSelectedUni(null); setIsMobileMenuOpen(false); }} className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-colors ${activeTab === 'universities' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-800'}`}><Building2 size={18} /><span className="font-medium text-sm">Target Universities</span></button>
+          <button onClick={() => { setActiveTab('outreach'); setIsMobileMenuOpen(false); }} className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-colors ${activeTab === 'outreach' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-800'}`}><Briefcase size={18} /><span className="font-medium text-sm">Professors CRM</span></button>
+          <button onClick={() => { setActiveTab('scholarships'); setIsMobileMenuOpen(false); }} className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-colors ${activeTab === 'scholarships' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-800'}`}><Award size={18} /><span className="font-medium text-sm">Scholarships</span></button>
+
+          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mt-6 mb-2 px-2">Intelligence</p>
+          <button onClick={() => { setActiveTab('vault'); setIsMobileMenuOpen(false); }} className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-colors ${activeTab === 'vault' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-800'}`}><FileText size={18} /><span className="font-medium text-sm">Document Vault</span></button>
+          <button onClick={() => { setActiveTab('assistant'); setIsMobileMenuOpen(false); }} className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-colors ${activeTab === 'assistant' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-800'}`}><MessageSquare size={18} /><span className="font-medium text-sm">AI Co-Pilot</span></button>
+        </div>
+        <div className="p-4 border-t border-slate-800 flex items-center space-x-3">
+          <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 font-bold">CJ</div>
+          <div><p className="text-xs font-bold text-slate-200">Cmdr. Jarif</p><p className="text-[10px] text-slate-500">Offline CRM Vault</p></div>
+        </div>
+      </aside>
+
+      {/* Main Content Area */}
+      <main className="flex-1 md:ml-64 p-4 md:p-8 mt-16 md:mt-0 overflow-y-auto">
+        <div className="mx-auto max-w-7xl">
+          {activeTab === 'dashboard' && renderDashboard()}
+          {activeTab === 'outreach' && renderKanban()}
+          {activeTab === 'scholarships' && renderScholarships()}
+          {activeTab === 'universities' && renderTargetUniversities()}
+          {activeTab === 'countries' && renderTargetCountries()}
+          {activeTab === 'vault' && renderVault()}
+          {activeTab === 'assistant' && (
+            <div className="h-[calc(100vh-8rem)] flex flex-col bg-slate-900 border border-slate-800 rounded-xl overflow-hidden animate-in fade-in"><div className="p-4 border-b border-slate-800 bg-slate-950 flex"><BrainCircuit className="text-indigo-400 mr-2" size={20} /><h3 className="font-bold text-slate-200">AI Strategy Co-Pilot</h3></div><div className="flex-1 p-4 space-y-4 overflow-y-auto bg-slate-900/50">{chatMessages.map((msg, i) => <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}><div className={`max-w-[80%] p-4 rounded-2xl text-sm leading-relaxed ${msg.role === 'user' ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-slate-800 border border-slate-700 text-slate-300 rounded-bl-none shadow-sm'}`}><p className="whitespace-pre-wrap">{msg.text}</p></div></div>)}{isTyping && <div className="flex justify-start"><div className="max-w-[85%] rounded-2xl p-3 bg-slate-800 border border-slate-700 text-slate-300 rounded-bl-none flex items-center space-x-2"><Loader2 size={16} className="animate-spin text-indigo-400" /><span className="text-xs text-slate-400">Analyzing architecture...</span></div></div>}</div><div className="p-4 border-t border-slate-800 bg-slate-950"><form onSubmit={handleSendMessage} className="flex space-x-2"><input value={chatInput || ''} onChange={e => setChatInput(e.target.value)} placeholder="Ask Gemini for academic strategy..." className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-sm focus:border-indigo-500 outline-none" /><button type="submit" disabled={isTyping || !chatInput} className="bg-indigo-600 text-white px-5 py-3 rounded-lg hover:bg-indigo-500 disabled:opacity-50"><Send size={18} /></button></form></div></div>
+          )}
         </div>
       </main>
+
+      {/* GLOBAL: Editable Professor Side Panel */}
+      {selectedProf && (
+        <div className="fixed inset-y-0 right-0 w-full md:w-[450px] bg-slate-900 shadow-2xl border-l border-slate-700 z-50 flex flex-col animate-in slide-in-from-right">
+          <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+            <div><h2 className="text-lg font-bold text-slate-100">{selectedProf.name}</h2><p className="text-xs text-indigo-400">{selectedProf.university}</p></div>
+            <button onClick={() => setSelectedProf(null)} className="text-slate-400 hover:text-white p-2 bg-slate-800 rounded-lg"><X size={18} /></button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-5 space-y-5">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-slate-800 p-3 rounded-lg border border-slate-700"><p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Editable Status</p>
+                <select value={selectedProf.statusPhase || 'Lead'} onChange={(e) => handleProfUpdate(selectedProf.id, 'statusPhase', e.target.value)} className="mt-1 w-full bg-slate-950 border border-slate-600 text-slate-200 text-xs font-bold rounded p-1.5 outline-none cursor-pointer focus:border-indigo-500 transition-colors">
+                  {KANBAN_COLUMNS.map(col => <option key={col} value={col}>{col}</option>)}
+                </select>
+              </div>
+              <div className="bg-slate-800 p-3 rounded-lg border border-slate-700"><p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Match Score</p><p className="text-lg font-bold text-emerald-400">{selectedProf.matchScore}%</p></div>
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-slate-400 mb-2 uppercase flex items-center"><PenTool size={12} className="mr-1 text-indigo-400" /> Editable: Latest Publication</h3>
+              <textarea value={selectedProf.latestPaper || ''} onChange={(e) => handleProfUpdate(selectedProf.id, 'latestPaper', e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-sm text-indigo-300 font-medium focus:outline-none focus:border-indigo-500 resize-none h-20 transition-colors" />
+            </div>
+            <div>
+              <button onClick={() => handleGenerateDraft(selectedProf.id)} disabled={isDraftingEmail} className="w-full mb-3 text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-3 rounded-lg flex items-center justify-center font-bold transition-all shadow-lg disabled:opacity-50">
+                {isDraftingEmail ? <Loader2 size={14} className="animate-spin mr-2" /> : <Sparkles size={14} className="mr-2" />}
+                {isDraftingEmail ? "Analyzing Vault Context..." : "Generate Custom AI Draft"}
+              </button>
+              <div className="relative group">
+                <textarea className="w-full h-72 bg-slate-950 border border-slate-700 rounded-xl p-4 text-xs text-slate-300 focus:outline-none resize-none font-mono leading-relaxed" value={drafts[selectedProf.id] || "Ready to draft email. Uses Document Vault context automatically."} onChange={(e) => setDrafts({ ...drafts, [selectedProf.id]: e.target.value })} />
+                {drafts[selectedProf.id] && (
+                  <button onClick={() => handleCopy(drafts[selectedProf.id])} className="absolute bottom-3 right-3 bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded text-xs font-bold flex items-center transition-colors">
+                    {copyNotice ? <CheckCircle size={14} className="mr-1" /> : <Copy size={14} className="mr-1" />} {copyNotice || "Copy"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GLOBAL: Editable Scholarship Side Panel */}
+      {selectedScholarship && (
+        <div className="fixed inset-y-0 right-0 w-full md:w-[450px] bg-slate-900 shadow-2xl border-l border-slate-700 z-50 flex flex-col animate-in slide-in-from-right">
+          <div className="p-5 border-b border-slate-800 flex justify-between items-start bg-slate-950">
+            <div>
+              <h2 className="text-lg font-bold text-slate-100 mb-1">{selectedScholarship.name}</h2>
+              <span className="inline-flex items-center text-[10px] font-medium bg-slate-800 text-slate-300 px-2 py-0.5 rounded"><Globe size={10} className="mr-1" /> {selectedScholarship.country}</span>
+            </div>
+            <button onClick={() => setSelectedScholarship(null)} className="text-slate-400 hover:text-white p-2 bg-slate-800 rounded-lg"><X size={18} /></button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-5 space-y-4">
+
+            <div className="bg-slate-800 p-3 rounded-lg border border-slate-700">
+              <label className="text-[10px] text-slate-500 uppercase font-bold mb-1 block">Editable Status</label>
+              <select value={selectedScholarship.status || 'Discovery'} onChange={(e) => handleScholarshipUpdate(selectedScholarship.id, 'status', e.target.value)} className="w-full bg-slate-950 border border-slate-600 text-slate-200 text-xs font-bold rounded p-1.5 outline-none cursor-pointer focus:border-indigo-500 transition-colors">
+                {SCHOLARSHIP_STATUSES.map(col => <option key={col} value={col}>{col}</option>)}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="text-[10px] text-slate-500 uppercase font-bold mb-1 block">Provider</label><input type="text" value={selectedScholarship.provider || ''} onChange={(e) => handleScholarshipUpdate(selectedScholarship.id, 'provider', e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-200 focus:border-indigo-500 outline-none" /></div>
+              <div><label className="text-[10px] text-slate-500 uppercase font-bold mb-1 block">Amount</label><input type="text" value={selectedScholarship.amount || ''} onChange={(e) => handleScholarshipUpdate(selectedScholarship.id, 'amount', e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-emerald-400 font-bold focus:border-indigo-500 outline-none" /></div>
+            </div>
+
+            <div><label className="text-[10px] text-slate-500 uppercase font-bold mb-1 block">Result / Deadline Date</label><input type="date" value={selectedScholarship.resultDate || ''} onChange={(e) => handleScholarshipUpdate(selectedScholarship.id, 'resultDate', e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-200 focus:border-indigo-500 outline-none" /></div>
+
+            <div className="pt-4 border-t border-slate-800">
+              <h3 className="text-xs font-bold text-slate-300 mb-3 uppercase flex items-center"><LinkIcon size={12} className="mr-1 text-indigo-400" /> Portal Credentials</h3>
+              <div className="space-y-3">
+                <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">Portal URL</label><input type="text" value={selectedScholarship.portalUrl || ''} onChange={(e) => handleScholarshipUpdate(selectedScholarship.id, 'portalUrl', e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-indigo-400 focus:border-indigo-500 outline-none" /></div>
+                <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">Username</label><input type="text" value={selectedScholarship.username || ''} onChange={(e) => handleScholarshipUpdate(selectedScholarship.id, 'username', e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm text-slate-200 focus:border-indigo-500 outline-none font-mono" /></div>
+                <div><label className="text-[10px] text-slate-500 font-bold mb-1 block">Password</label>
+                  <div className="flex items-center bg-slate-950 rounded border border-slate-700 overflow-hidden focus-within:border-indigo-500">
+                    <input type={showPasswordMap[selectedScholarship.id] ? "text" : "password"} value={selectedScholarship.password || ''} onChange={(e) => handleScholarshipUpdate(selectedScholarship.id, 'password', e.target.value)} className="w-full bg-transparent p-2 text-sm text-slate-200 outline-none font-mono" />
+                    <button onClick={() => togglePasswordVisibility(selectedScholarship.id)} className="px-3 text-slate-400 hover:text-white">{showPasswordMap[selectedScholarship.id] ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CRM Modals (Add / Find - Professors & Scholarships) */}
+      {crmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950">
+              <h3 className="font-bold text-lg text-slate-100 flex items-center">
+                {crmModal === 'addProf' && <><UserPlus className="mr-2 text-emerald-400" /> Add Professor Manually</>}
+                {crmModal === 'findProf' && <><Search className="mr-2 text-indigo-400" /> AI Professor Discovery</>}
+                {crmModal === 'addScholarship' && <><Plus className="mr-2 text-emerald-400" /> Add Scholarship Manually</>}
+                {crmModal === 'findScholarship' && <><Search className="mr-2 text-indigo-400" /> AI Scholarship Discovery</>}
+              </h3>
+              <button onClick={() => setCrmModal(null)} className="text-slate-400 hover:text-white"><X size={20} /></button>
+            </div>
+
+            <div className="p-6 overflow-y-auto">
+
+              {/* PROFESSOR: Manual Add */}
+              {crmModal === 'addProf' && (
+                <form onSubmit={handleManualAddProf} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div><label className="text-xs font-bold text-slate-400">Name</label><input required value={newProfForm.name || ''} onChange={e => setNewProfForm({ ...newProfForm, name: e.target.value })} className="w-full mt-1 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded p-2 text-sm outline-none" /></div>
+                    <div><label className="text-xs font-bold text-slate-400">University</label><input required value={newProfForm.university || ''} onChange={e => setNewProfForm({ ...newProfForm, university: e.target.value })} className="w-full mt-1 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded p-2 text-sm outline-none" /></div>
+                    <div><label className="text-xs font-bold text-slate-400">Country</label><input required value={newProfForm.country || ''} onChange={e => setNewProfForm({ ...newProfForm, country: e.target.value })} className="w-full mt-1 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded p-2 text-sm outline-none" /></div>
+                    <div><label className="text-xs font-bold text-slate-400">Status</label><select value={newProfForm.statusPhase || 'Lead'} onChange={e => setNewProfForm({ ...newProfForm, statusPhase: e.target.value })} className="w-full mt-1 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded p-2 text-sm outline-none">{KANBAN_COLUMNS.map(col => <option key={col} value={col}>{col}</option>)}</select></div>
+                  </div>
+                  <div><label className="text-xs font-bold text-slate-400">Latest Paper</label><input value={newProfForm.latestPaper || ''} onChange={e => setNewProfForm({ ...newProfForm, latestPaper: e.target.value })} className="w-full mt-1 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded p-2 text-sm outline-none" /></div>
+                  <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-lg mt-4 shadow-lg transition-colors">Save to CRM Pipeline</button>
+                </form>
+              )}
+
+              {/* PROFESSOR: AI Find */}
+              {crmModal === 'findProf' && (
+                <div className="space-y-4">
+                  <p className="text-sm text-slate-400">Enter a topic, university, or region. Gemini will hunt down top professors and format them as interactive cards.</p>
+                  <div className="flex space-x-2">
+                    <input type="text" placeholder="e.g. Stanford Generative AI" value={aiSearchQuery || ''} onChange={e => setAiSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && runProfDiscovery()} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:border-indigo-500 outline-none" />
+                    <button onClick={() => runProfDiscovery()} disabled={isSearchingAI || !aiSearchQuery} className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 rounded-lg flex items-center justify-center disabled:opacity-50 transition-colors">
+                      {isSearchingAI ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
+                    </button>
+                  </div>
+                  {aiSearchResults && (
+                    <div className="mt-6">
+                      <h3 className="text-indigo-400 font-bold mb-4 flex items-center"><BrainCircuit size={18} className="mr-2" /> AI Lead Generation Engine</h3>
+                      {Array.isArray(aiSearchResults) ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {aiSearchResults.map((res, i) => (
+                            <div key={i} className="bg-slate-950 border border-slate-800 p-4 rounded-lg flex flex-col hover:border-indigo-500 transition-colors">
+                              <h4 className="font-bold text-slate-200">{res.name}</h4>
+                              <p className="text-xs text-slate-400 mb-2">{res.university} • {res.department}</p>
+                              <p className="text-xs text-slate-300 italic mb-4 leading-relaxed">"{res.matchReason}"</p>
+                              <button onClick={() => { executeAddProf({ ...res, statusPhase: 'Lead' }); setAiSearchResults(prev => prev.filter((_, idx) => idx !== i)); }} className="mt-auto w-full text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded transition-colors flex items-center justify-center">
+                                <Plus size={14} className="mr-1" /> Quick Add to CRM
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="bg-slate-950 border border-slate-800 p-4 rounded-lg text-sm text-slate-300 whitespace-pre-wrap font-mono max-h-64 overflow-y-auto">
+                          {typeof aiSearchResults === 'object' ? JSON.stringify(aiSearchResults, null, 2) : String(aiSearchResults)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* SCHOLARSHIP: Manual Add */}
+              {crmModal === 'addScholarship' && (
+                <form onSubmit={handleManualAddScholarship} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div><label className="text-xs font-bold text-slate-400">Scholarship Name</label><input required value={newScholarshipForm.name || ''} onChange={e => setNewScholarshipForm({ ...newScholarshipForm, name: e.target.value })} className="w-full mt-1 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded p-2 text-sm outline-none" /></div>
+                    <div><label className="text-xs font-bold text-slate-400">Provider</label><input value={newScholarshipForm.provider || ''} onChange={e => setNewScholarshipForm({ ...newScholarshipForm, provider: e.target.value })} className="w-full mt-1 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded p-2 text-sm outline-none" /></div>
+                    <div><label className="text-xs font-bold text-slate-400">Target Country</label><input required value={newScholarshipForm.country || ''} onChange={e => setNewScholarshipForm({ ...newScholarshipForm, country: e.target.value })} className="w-full mt-1 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded p-2 text-sm outline-none" /></div>
+                    <div><label className="text-xs font-bold text-slate-400">Amount / Value</label><input value={newScholarshipForm.amount || ''} onChange={e => setNewScholarshipForm({ ...newScholarshipForm, amount: e.target.value })} className="w-full mt-1 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded p-2 text-sm outline-none" placeholder="e.g. $50,000" /></div>
+                    <div><label className="text-xs font-bold text-slate-400">Result / Deadline Date</label><input type="date" value={newScholarshipForm.resultDate || ''} onChange={e => setNewScholarshipForm({ ...newScholarshipForm, resultDate: e.target.value })} className="w-full mt-1 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded p-2 text-sm outline-none" /></div>
+                    <div><label className="text-xs font-bold text-slate-400">Status</label><select value={newScholarshipForm.status || 'Discovery'} onChange={e => setNewScholarshipForm({ ...newScholarshipForm, status: e.target.value })} className="w-full mt-1 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded p-2 text-sm outline-none">{SCHOLARSHIP_STATUSES.map(col => <option key={col} value={col}>{col}</option>)}</select></div>
+                  </div>
+                  <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-lg mt-4 shadow-lg transition-colors">Save to Vault</button>
+                </form>
+              )}
+
+              {/* SCHOLARSHIP: AI Find */}
+              {crmModal === 'findScholarship' && (
+                <div className="space-y-4">
+                  <p className="text-sm text-slate-400">Tell Gemini what kind of funding you need (e.g. "PhD Grants for Generative AI in Japan").</p>
+                  <div className="flex space-x-2">
+                    <input type="text" placeholder="Search parameters..." value={aiSearchQuery || ''} onChange={e => setAiSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && runScholarshipDiscovery()} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-sm focus:border-indigo-500 outline-none" />
+                    <button onClick={runScholarshipDiscovery} disabled={isSearchingAI || !aiSearchQuery} className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 rounded-lg flex items-center justify-center disabled:opacity-50 transition-colors">
+                      {isSearchingAI ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
+                    </button>
+                  </div>
+                  {aiSearchResults && (
+                    <div className="mt-6">
+                      <h3 className="text-indigo-400 font-bold mb-4 flex items-center"><Award size={18} className="mr-2" /> AI Scholarship Matchmaker</h3>
+                      {Array.isArray(aiSearchResults) ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {aiSearchResults.map((res, i) => (
+                            <div key={i} className="bg-slate-950 border border-slate-800 p-4 rounded-lg flex flex-col hover:border-indigo-500 transition-colors">
+                              <h4 className="font-bold text-slate-200">{res.name}</h4>
+                              <p className="text-xs text-slate-400 mb-2">{res.provider} • {res.country} • {res.amount}</p>
+                              <p className="text-xs text-slate-300 italic mb-4 leading-relaxed">"{res.matchReason}"</p>
+                              <button onClick={() => { executeAddScholarship({ ...res, status: 'Discovery' }); setAiSearchResults(prev => prev.filter((_, idx) => idx !== i)); }} className="mt-auto w-full text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded transition-colors flex items-center justify-center">
+                                <Plus size={14} className="mr-1" /> Quick Add to Vault
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="bg-slate-950 border border-slate-800 p-4 rounded-lg text-sm text-slate-300 whitespace-pre-wrap font-mono max-h-64 overflow-y-auto">
+                          {typeof aiSearchResults === 'object' ? JSON.stringify(aiSearchResults, null, 2) : String(aiSearchResults)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
