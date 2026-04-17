@@ -24,22 +24,42 @@ const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__f
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 
-// --- API ENGINE (Will be moved to Vercel later) ---
+// --- SECURE API ENGINE (Routed to Vercel Backend) ---
 const fetchFromGemini = async (prompt, systemPrompt = "You are a helpful AI.") => {
-  const apiKey = ""; // API key is injected by the execution environment
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-  const payload = { contents: [{ parts: [{ text: prompt }] }], systemInstruction: { parts: [{ text: systemPrompt }] } };
-  const delays = [1000, 2000, 4000, 8000, 16000];
-  for (let attempt = 0; attempt < 6; attempt++) {
-    try {
-      const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const result = await response.json();
-      return result.candidates?.[0]?.content?.parts?.[0]?.text || "No response generated.";
-    } catch (error) {
-      if (attempt === 5) return "Sorry, I encountered an error connecting to the AI. Please try again later.";
-      await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+  // Grab the current logged-in user from Firebase
+  const user = auth.currentUser;
+
+  if (!user) {
+    alert("Commander, authentication error. Please log in again.");
+    return "Error: User not authenticated.";
+  }
+
+  try {
+    // Ping YOUR secure Vercel backend, not Google
+    const response = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        systemPrompt,
+        uid: user.uid // Securely pass the user ID to check quotas
+      })
+    });
+
+    const data = await response.json();
+
+    // Catch the Freemium Paywall Trigger
+    if (response.status === 403 && data.error === 'LIMIT_REACHED') {
+      alert("Weekly limit reached! Please upgrade to Scholar Pro on the website for unlimited access and advanced reasoning models.");
+      return "⚠️ Limit Reached. Please upgrade to Pro.";
     }
+
+    if (!response.ok) throw new Error(data.error || 'Server Error');
+
+    return data.text;
+  } catch (error) {
+    console.error("Secure Relay Error:", error);
+    return "Sorry, the secure backend encountered an error. Please try again.";
   }
 };
 
