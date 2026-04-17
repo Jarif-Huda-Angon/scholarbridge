@@ -5,55 +5,54 @@ import {
   Briefcase, Globe, FileText, Plus, Send, Calendar,
   Building2, BrainCircuit, MessageSquare, PenTool, UploadCloud,
   Loader2, Sparkles, Menu, UserPlus, GitBranch, Save, ChevronRight,
-  PieChart, TrendingUp, Clock, Award, Eye, EyeOff, Link as LinkIcon
+  PieChart, TrendingUp, Clock, Award, Eye, EyeOff, Link as LinkIcon,
+  Mail, Lock, LogOut
 } from 'lucide-react';
 
-// --- API ENGINE ---
+// --- FIREBASE AUTHENTICATION ---
+import { initializeApp } from 'firebase/app';
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+  apiKey: "AIzaSyDSv4XfQmpZvCouylmrVRHFksV55VR3_Ow",
+  authDomain: "scholarbridge-7f62c.firebaseapp.com",
+  projectId: "scholarbridge-7f62c",
+  storageBucket: "scholarbridge-7f62c.firebasestorage.app",
+  messagingSenderId: "1037288700484",
+  appId: "1:1037288700484:web:2cb903f7075115aee59a11"
+};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+
+// --- API ENGINE (Will be moved to Vercel later) ---
 const fetchFromGemini = async (prompt, systemPrompt = "You are a helpful AI.") => {
   const apiKey = ""; // API key is injected by the execution environment
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-  const payload = {
-    contents: [{ parts: [{ text: prompt }] }],
-    systemInstruction: { parts: [{ text: systemPrompt }] }
-  };
-
+  const payload = { contents: [{ parts: [{ text: prompt }] }], systemInstruction: { parts: [{ text: systemPrompt }] } };
   const delays = [1000, 2000, 4000, 8000, 16000];
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const result = await response.json();
       return result.candidates?.[0]?.content?.parts?.[0]?.text || "No response generated.";
     } catch (error) {
-      if (attempt === 5) {
-        console.error("Gemini API Error:", error);
-        return "Sorry, I encountered an error connecting to the AI. Please try again later.";
-      }
+      if (attempt === 5) return "Sorry, I encountered an error connecting to the AI. Please try again later.";
       await new Promise(resolve => setTimeout(resolve, delays[attempt]));
     }
   }
 };
 
-// JSON Extractor Helper
 const extractJSON = (text) => {
   try {
     const match = text.match(/\[[\s\S]*\]/);
     if (match) return JSON.parse(match[0]);
-
     const parsed = JSON.parse(text);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      for (const key in parsed) {
-        if (Array.isArray(parsed[key])) return parsed[key];
-      }
+      for (const key in parsed) if (Array.isArray(parsed[key])) return parsed[key];
     }
     return parsed;
-  } catch (e) {
-    return null;
-  }
+  } catch (e) { return null; }
 };
 
 // --- INITIAL DATABASE SCHEMA ---
@@ -84,7 +83,110 @@ const initialScholarships = [
 const KANBAN_COLUMNS = ['Lead', 'Draft Ready', 'Contacted', 'Follow-up 1', 'Replied', 'Accepted', 'Rejected'];
 const SCHOLARSHIP_STATUSES = ['Discovery', 'Drafting', 'Applied', 'Interview', 'Won', 'Rejected'];
 
+// ==========================================
+// 1. THE GATEKEEPER UI (LOGIN/SIGNUP)
+// ==========================================
+const AuthScreen = () => {
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      if (isSignUp) {
+        await createUserWithEmailAndPassword(auth, email, password);
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+      }
+    } catch (err) {
+      setError(err.message.replace('Firebase: ', '')); // Clean up the error string
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[#0B0A10] flex flex-col items-center justify-center relative overflow-hidden font-sans">
+      <div className="absolute top-8 left-8 flex items-center space-x-2">
+        <GraduationCap className="text-white" size={28} />
+        <span className="text-xl font-bold text-white tracking-wide">ScholarBridge</span>
+      </div>
+
+      <div className="bg-[#13111C] border border-slate-800 rounded-2xl p-8 w-full max-w-[420px] relative shadow-2xl">
+        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-400 to-purple-500 rounded-t-2xl"></div>
+
+        <h2 className="text-3xl font-bold text-white mb-2 mt-2">
+          {isSignUp ? 'Create account' : 'Welcome back'}
+        </h2>
+        <p className="text-slate-400 text-sm mb-8">
+          {isSignUp ? 'Sign up to build your academic pipeline.' : 'Enter your details to access your workspace.'}
+        </p>
+
+        {error && <div className="bg-rose-500/10 border border-rose-500/50 text-rose-400 text-xs p-3 rounded-lg mb-6">{error}</div>}
+
+        <form onSubmit={handleAuth} className="space-y-5">
+          <div>
+            <label className="text-xs font-bold text-slate-300 mb-1.5 block">Email Address</label>
+            <div className="relative">
+              <Mail className="absolute left-3.5 top-1/2 transform -translate-y-1/2 text-slate-500" size={18} />
+              <input
+                type="email" required placeholder="name@university.edu"
+                value={email} onChange={(e) => setEmail(e.target.value)}
+                className="w-full bg-[#1C1A27] border border-slate-800 rounded-xl py-3 pl-11 pr-4 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs font-bold text-slate-300 mb-1.5 block">Password</label>
+            <div className="relative">
+              <Lock className="absolute left-3.5 top-1/2 transform -translate-y-1/2 text-slate-500" size={18} />
+              <input
+                type="password" required placeholder="••••••••"
+                value={password} onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-[#1C1A27] border border-slate-800 rounded-xl py-3 pl-11 pr-4 text-sm text-slate-200 focus:outline-none focus:border-purple-500 transition-colors"
+              />
+            </div>
+          </div>
+
+          <button type="submit" disabled={loading} className="w-full bg-[#A855F7] hover:bg-[#9333EA] text-white font-bold py-3.5 rounded-xl mt-2 transition-colors flex justify-center items-center">
+            {loading ? <Loader2 size={18} className="animate-spin" /> : (isSignUp ? 'Create Account' : 'Sign In')}
+          </button>
+        </form>
+
+        <div className="mt-6 text-center text-sm text-slate-400">
+          {isSignUp ? "Already have an account? " : "Don't have an account? "}
+          <button onClick={() => { setIsSignUp(!isSignUp); setError(''); }} className="text-[#A855F7] font-bold hover:underline">
+            {isSignUp ? 'Sign in' : 'Sign up'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ==========================================
+// 2. MAIN APPLICATION (THE SOFTWARE)
+// ==========================================
 export default function App() {
+  // --- AUTHENTICATION STATE ---
+  const [currentUser, setCurrentUser] = useState(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+
+  // Listen for login/logout events from Firebase
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+      setIsAuthLoading(false);
+    });
+    return () => unsubscribe(); // Cleanup listener on unmount
+  }, []);
+
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
@@ -101,13 +203,11 @@ export default function App() {
   const [selectedScholarship, setSelectedScholarship] = useState(null);
   const [draggedProfId, setDraggedProfId] = useState(null);
   const [showPasswordMap, setShowPasswordMap] = useState({});
-
-  // CRM Filters
   const [filterCountry, setFilterCountry] = useState('All');
   const [filterUni, setFilterUni] = useState('');
-
-  // Modals & Forms
   const [crmModal, setCrmModal] = useState(null);
+
+  // Form State
   const [newProfForm, setNewProfForm] = useState({ name: '', university: '', department: '', country: '', researchTags: '', latestPaper: '', statusPhase: 'Lead' });
   const [newUniName, setNewUniName] = useState('');
   const [newUniCountry, setNewUniCountry] = useState('');
@@ -127,6 +227,24 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [chatMessages, setChatMessages] = useState([{ role: 'assistant', text: "Commander, Dashboard, CRM, and Scholarship Vault are fully synced. Awaiting your command." }]);
+
+  // ==========================================
+  // GATEKEEPER RENDER LOGIC
+  // ==========================================
+  // 1. If Firebase is checking credentials, show a loader
+  if (isAuthLoading) {
+    return <div className="min-h-screen bg-[#0B0A10] flex items-center justify-center"><Loader2 className="animate-spin text-purple-500" size={32} /></div>;
+  }
+
+  // 2. If NO user is logged in, block the app and show the Auth Screen
+  if (!currentUser) {
+    return <AuthScreen />;
+  }
+
+  // 3. If user IS logged in, render the app below.
+  const handleLogout = () => {
+    signOut(auth);
+  };
 
   // --- HELPERS ---
   const isNeedsFollowUp = (prof) => {
@@ -254,7 +372,6 @@ export default function App() {
     setIsDraftingEmail(false);
   };
 
-  // --- DRAG & DROP KANBAN ---
   const handleDrop = (e, targetColumn) => {
     e.preventDefault();
     if (draggedProfId) handleProfUpdate(draggedProfId, 'statusPhase', targetColumn);
@@ -267,7 +384,6 @@ export default function App() {
     setTimeout(() => setCopyNotice(''), 2000);
   };
 
-  // --- CHAT ---
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
@@ -462,7 +578,6 @@ export default function App() {
             </button>
           </div>
 
-          {/* Render AI Structured Results */}
           {aiSearchResults && (
             <div className="bg-slate-950 border border-indigo-500/30 p-5 rounded-lg mb-8">
               <h3 className="text-indigo-400 font-bold mb-4 flex items-center"><BrainCircuit size={18} className="mr-2" /> AI Lead Generation (Duplicates Excluded)</h3>
@@ -618,9 +733,19 @@ export default function App() {
           <button onClick={() => { setActiveTab('vault'); setIsMobileMenuOpen(false); }} className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-colors ${activeTab === 'vault' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-800'}`}><FileText size={18} /><span className="font-medium text-sm">Document Vault</span></button>
           <button onClick={() => { setActiveTab('assistant'); setIsMobileMenuOpen(false); }} className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-colors ${activeTab === 'assistant' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-800'}`}><MessageSquare size={18} /><span className="font-medium text-sm">AI Co-Pilot</span></button>
         </div>
-        <div className="p-4 border-t border-slate-800 flex items-center space-x-3">
-          <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 font-bold">CJ</div>
-          <div><p className="text-xs font-bold text-slate-200">Cmdr. Jarif</p><p className="text-[10px] text-slate-500">Offline CRM Vault</p></div>
+        <div className="p-4 border-t border-slate-800 flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 font-bold">
+              <User size={16} />
+            </div>
+            <div className="overflow-hidden">
+              <p className="text-xs font-bold text-slate-200 truncate w-32">{currentUser.email}</p>
+              <p className="text-[10px] text-slate-500">Free Account</p>
+            </div>
+          </div>
+          <button onClick={handleLogout} className="text-slate-500 hover:text-rose-400 transition-colors p-2 bg-slate-800 rounded-lg">
+            <LogOut size={16} />
+          </button>
         </div>
       </aside>
 
