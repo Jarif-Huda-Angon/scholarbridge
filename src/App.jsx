@@ -9,9 +9,10 @@ import {
   Mail, Lock, LogOut
 } from 'lucide-react';
 
-// --- FIREBASE AUTHENTICATION ---
+// --- FIREBASE AUTHENTICATION & FIRESTORE ---
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
 
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
   apiKey: "AIzaSyDSv4XfQmpZvCouylmrVRHFksV55VR3_Ow",
@@ -21,12 +22,13 @@ const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__f
   messagingSenderId: "1037288700484",
   appId: "1:1037288700484:web:2cb903f7075115aee59a11"
 };
+
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
+const db = getFirestore(app);
 
 // --- SECURE API ENGINE (Routed to Vercel Backend) ---
 const fetchFromGemini = async (prompt, systemPrompt = "You are a helpful AI.") => {
-  // Grab the current logged-in user from Firebase
   const user = auth.currentUser;
 
   if (!user) {
@@ -35,20 +37,18 @@ const fetchFromGemini = async (prompt, systemPrompt = "You are a helpful AI.") =
   }
 
   try {
-    // Ping YOUR secure Vercel backend, not Google
     const response = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         prompt,
         systemPrompt,
-        uid: user.uid // Securely pass the user ID to check quotas
+        uid: user.uid
       })
     });
 
     const data = await response.json();
 
-    // Catch the Freemium Paywall Trigger
     if (response.status === 403 && data.error === 'LIMIT_REACHED') {
       alert("Weekly limit reached! Please upgrade to Scholar Pro on the website for unlimited access and advanced reasoning models.");
       return "⚠️ Limit Reached. Please upgrade to Pro.";
@@ -75,29 +75,14 @@ const extractJSON = (text) => {
   } catch (e) { return null; }
 };
 
-// --- INITIAL DATABASE SCHEMA ---
+// --- INITIAL DATABASE SCHEMA (Fallbacks for new users) ---
 const initialProfessors = [
-  { id: 'p1', name: 'Dr. Alan Turing', university: 'MIT', department: 'CSAIL', country: 'US', researchTags: ['LLM', 'Multi-Agent'], matchScore: 95, statusPhase: 'Draft Ready', lastContactedDate: Date.now() - (2 * 24 * 60 * 60 * 1000), latestPaper: 'Scalable LLM Orchestration in Edge Environments' },
-  { id: 'p2', name: 'Dr. Kenji Fujimoto', university: 'Kyoto University', department: 'Robotics', country: 'Japan', researchTags: ['Swarm Intelligence'], matchScore: 88, statusPhase: 'Contacted', lastContactedDate: Date.now() - (9 * 24 * 60 * 60 * 1000), latestPaper: 'Decentralized Swarm Intelligence Protocols' },
-  { id: 'p3', name: 'Dr. Wei Chen', university: 'Tsinghua University', department: 'Computer Science', country: 'China', researchTags: ['HPC', 'Neural Networks'], matchScore: 92, statusPhase: 'Lead', lastContactedDate: null, latestPaper: 'Compute Efficiency in Large-Scale Neural Nets' }
+  { id: 'p1', name: 'Dr. Alan Turing', university: 'MIT', department: 'CSAIL', country: 'US', researchTags: ['LLM', 'Multi-Agent'], matchScore: 95, statusPhase: 'Draft Ready', lastContactedDate: Date.now() - (2 * 24 * 60 * 60 * 1000), latestPaper: 'Scalable LLM Orchestration in Edge Environments' }
 ];
-
-const initialUniversities = [
-  { id: 'u1', name: 'MIT', country: 'US' },
-  { id: 'u2', name: 'Kyoto University', country: 'Japan' },
-  { id: 'u3', name: 'Tsinghua University', country: 'China' },
-  { id: 'u4', name: 'Boston University', country: 'US' }
-];
-
-const initialCountries = [
-  { id: 'c1', name: 'US' },
-  { id: 'c2', name: 'Japan' },
-  { id: 'c3', name: 'China' }
-];
-
+const initialUniversities = [{ id: 'u1', name: 'MIT', country: 'US' }];
+const initialCountries = [{ id: 'c1', name: 'US' }];
 const initialScholarships = [
-  { id: 's1', name: 'MEXT University Recommendation', provider: 'MEXT Japan', country: 'Japan', portalUrl: 'studyinjapan.go.jp', username: 'jarif_mext', password: 'encrypted_pass_123', resultDate: '2026-08-15', amount: 'Full Tuition + Stipend', status: 'Applied' },
-  { id: 's2', name: 'Fulbright Foreign Student Program', provider: 'US Dept of State', country: 'US', portalUrl: 'fulbright.org', username: 'jarif_fb', password: 'encrypted_pass_456', resultDate: '2026-09-10', amount: 'Full Funding', status: 'Drafting' }
+  { id: 's1', name: 'MEXT University Recommendation', provider: 'MEXT Japan', country: 'Japan', portalUrl: 'studyinjapan.go.jp', username: 'jarif_mext', password: 'encrypted_pass_123', resultDate: '2026-08-15', amount: 'Full Tuition + Stipend', status: 'Applied' }
 ];
 
 const KANBAN_COLUMNS = ['Lead', 'Draft Ready', 'Contacted', 'Follow-up 1', 'Replied', 'Accepted', 'Rejected'];
@@ -124,7 +109,7 @@ const AuthScreen = () => {
         await signInWithEmailAndPassword(auth, email, password);
       }
     } catch (err) {
-      setError(err.message.replace('Firebase: ', '')); // Clean up the error string
+      setError(err.message.replace('Firebase: ', '')); 
     } finally {
       setLoading(false);
     }
@@ -198,25 +183,17 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
 
-  // Listen for login/logout events from Firebase
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
-      setIsAuthLoading(false);
-    });
-    return () => unsubscribe(); // Cleanup listener on unmount
-  }, []);
-
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  // Relational CRM State
-  const [professors, setProfessors] = useState(initialProfessors);
-  const [targetUniversities, setTargetUniversities] = useState(initialUniversities);
-  const [targetCountries, setTargetCountries] = useState(initialCountries);
-  const [scholarships, setScholarships] = useState(initialScholarships);
+  // --- PERSISTENT CLOUD STATE ---
+  const [professors, setProfessors] = useState([]);
+  const [targetUniversities, setTargetUniversities] = useState([]);
+  const [targetCountries, setTargetCountries] = useState([]);
+  const [scholarships, setScholarships] = useState([]);
+  const [vaultData, setVaultData] = useState({ cvText: '', sopText: '', proposalText: '', ongoingResearch: 'Agentic Orchestration Layer (AOL)', googleScholar: '', github: '', customLinks: [] });
 
-  // Selection & UI State
+  // UI Selection State
   const [selectedProf, setSelectedProf] = useState(null);
   const [selectedUni, setSelectedUni] = useState(null);
   const [selectedCountry, setSelectedCountry] = useState(null);
@@ -242,26 +219,94 @@ export default function App() {
   const [isDraftingEmail, setIsDraftingEmail] = useState(false);
   const [copyNotice, setCopyNotice] = useState('');
 
-  // Document Vault & Chat State
-  const [vaultData, setVaultData] = useState({ cvText: '', sopText: '', proposalText: '', ongoingResearch: 'Agentic Orchestration Layer (AOL)', googleScholar: '', github: '', customLinks: [] });
+  // Chat State
   const [chatInput, setChatInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const [chatMessages, setChatMessages] = useState([{ role: 'assistant', text: "Commander, Dashboard, CRM, and Scholarship Vault are fully synced. Awaiting your command." }]);
+  const [chatMessages, setChatMessages] = useState([{ role: 'assistant', text: "Commander, Dashboard and Cloud Sync are active. Awaiting your command." }]);
 
   // ==========================================
-  // GATEKEEPER RENDER LOGIC
+  // CLOUD SYNC LOGIC (Firestore)
   // ==========================================
-  // 1. If Firebase is checking credentials, show a loader
+
+  // 1. Listen for Auth & Load Data
+  useEffect(() => {
+    const loadData = async (uid) => {
+      try {
+        const docRef = doc(db, "users", uid);
+        const docSnap = await getDoc(docRef);
+
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.professors) setProfessors(data.professors);
+          else setProfessors(initialProfessors);
+
+          if (data.targetUniversities) setTargetUniversities(data.targetUniversities);
+          else setTargetUniversities(initialUniversities);
+
+          if (data.targetCountries) setTargetCountries(data.targetCountries);
+          else setTargetCountries(initialCountries);
+
+          if (data.scholarships) setScholarships(data.scholarships);
+          else setScholarships(initialScholarships);
+
+          if (data.vaultData) setVaultData(data.vaultData);
+        } else {
+          // Brand new user
+          setProfessors(initialProfessors);
+          setTargetUniversities(initialUniversities);
+          setTargetCountries(initialCountries);
+          setScholarships(initialScholarships);
+        }
+      } catch (error) {
+        console.error("Error loading data from cloud:", error);
+      }
+    };
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+      if (user) {
+        loadData(user.uid);
+      }
+      setIsAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Auto-Save to Cloud (Debounced)
+  useEffect(() => {
+    if (currentUser && !isAuthLoading) {
+      const syncData = async () => {
+        try {
+          await setDoc(doc(db, "users", currentUser.uid), {
+            professors,
+            targetUniversities,
+            targetCountries,
+            scholarships,
+            vaultData,
+            lastSync: Date.now()
+          }, { merge: true });
+        } catch (error) {
+          console.error("Cloud Sync Error:", error);
+        }
+      };
+
+      const timeoutId = setTimeout(syncData, 2000); // Wait 2s after typing stops to save
+      return () => clearTimeout(timeoutId);
+    }
+  }, [professors, targetUniversities, targetCountries, scholarships, vaultData, currentUser, isAuthLoading]);
+
+
+  // ==========================================
+  // GATEKEEPER RENDERING
+  // ==========================================
   if (isAuthLoading) {
     return <div className="min-h-screen bg-[#0B0A10] flex items-center justify-center"><Loader2 className="animate-spin text-purple-500" size={32} /></div>;
   }
 
-  // 2. If NO user is logged in, block the app and show the Auth Screen
   if (!currentUser) {
     return <AuthScreen />;
   }
 
-  // 3. If user IS logged in, render the app below.
   const handleLogout = () => {
     signOut(auth);
   };
@@ -289,6 +334,10 @@ export default function App() {
   const handleScholarshipUpdate = (schId, field, value) => {
     setScholarships(prev => prev.map(s => s.id === schId ? { ...s, [field]: value } : s));
     if (selectedScholarship?.id === schId) setSelectedScholarship(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleVaultChange = (field, value) => {
+    setVaultData(prev => ({ ...prev, [field]: value }));
   };
 
   const executeAddProf = (profData) => {
@@ -696,7 +745,7 @@ export default function App() {
     <div className="space-y-6 animate-in fade-in duration-500 max-w-5xl pb-12">
       <div className="flex flex-col md:flex-row justify-between md:items-end gap-4 mb-6">
         <div><h2 className="text-2xl font-bold text-slate-100">Document Vault</h2><p className="text-slate-400 mt-1">Provide your context. Gemini uses this secure vault to deeply personalize drafts.</p></div>
-        <button className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2.5 rounded-lg text-sm font-bold shadow-lg transition-all flex items-center"><Save size={18} className="mr-2" /> Save Local Vault</button>
+        <button className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2.5 rounded-lg text-sm font-bold shadow-lg transition-all flex items-center"><Save size={18} className="mr-2" /> Synced to Cloud</button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -760,7 +809,7 @@ export default function App() {
             </div>
             <div className="overflow-hidden">
               <p className="text-xs font-bold text-slate-200 truncate w-32">{currentUser.email}</p>
-              <p className="text-[10px] text-slate-500">Free Account</p>
+              <p className="text-[10px] text-emerald-500 font-bold">Data Synced to Cloud</p>
             </div>
           </div>
           <button onClick={handleLogout} className="text-slate-500 hover:text-rose-400 transition-colors p-2 bg-slate-800 rounded-lg">
@@ -915,7 +964,7 @@ export default function App() {
                               <h4 className="font-bold text-slate-200">{res.name}</h4>
                               <p className="text-xs text-slate-400 mb-2">{res.university} • {res.department}</p>
                               <p className="text-xs text-slate-300 italic mb-4 leading-relaxed">"{res.matchReason}"</p>
-                              <button onClick={() => { executeAddProf({ ...res, statusPhase: 'Lead' }); setAiSearchResults(prev => prev.filter((_, idx) => idx !== i)); }} className="mt-auto w-full text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded transition-colors flex items-center justify-center">
+                              <button onClick={() => { executeAddProf({ ...res, statusPhase: 'Lead' }); setAiSearchResults(prev => Array.isArray(prev) ? prev.filter((_, idx) => idx !== i) : prev); }} className="mt-auto w-full text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded transition-colors flex items-center justify-center">
                                 <Plus size={14} className="mr-1" /> Quick Add to CRM
                               </button>
                             </div>
